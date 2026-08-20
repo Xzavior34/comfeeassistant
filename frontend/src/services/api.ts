@@ -1,6 +1,6 @@
 const DEFAULT_API_URL = 'https://comfeeassistant.onrender.com';
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || DEFAULT_API_URL;
+export const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || DEFAULT_API_URL;
 
 export async function checkApiHealth() {
   try {
