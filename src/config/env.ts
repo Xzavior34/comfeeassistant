@@ -17,7 +17,7 @@ const envSchema = z.object({
   LLM_PROVIDER: z.enum(['mock', 'gemini', 'openai']).default('mock'),
   LLM_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_MODEL: z.string().default('gemini-1.5-pro-latest'),
+  GEMINI_MODEL: z.string().default('gemini-1.5-flash'),
   STORAGE_PROVIDER: z.enum(['local', 's3', 'supabase']).default('local'),
   STORAGE_LOCAL_DIR: z.string().default('./uploads'),
   SUPABASE_URL: z.string().optional(),
