@@ -41,19 +41,31 @@ export function App() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    await loginClinician(clinicianEmail);
-    setScreen('MEETINGS');
+    try {
+      await loginClinician(clinicianEmail);
+      setScreen('MEETINGS');
+    } catch (err: any) {
+      alert(err.message || 'Login failed');
+    }
   };
 
   const handleCreateMeeting = async () => {
-    const meeting = await createMeeting(clientRef, templateType, sessionFormat);
-    setMeetingId(meeting.id || `meeting-${Date.now()}`);
-    setScreen('CONSENT');
+    try {
+      const meeting = await createMeeting(clientRef || 'Anonymous-Client', templateType, sessionFormat);
+      setMeetingId(meeting.id || `meeting-${Date.now()}`);
+      setScreen('CONSENT');
+    } catch (err: any) {
+      alert(err.message || 'Meeting creation failed');
+    }
   };
 
   const handleGrantConsent = async () => {
-    await recordConsent(meetingId, true);
-    setScreen('RECORDING');
+    try {
+      await recordConsent(meetingId, true);
+      setScreen('RECORDING');
+    } catch (err: any) {
+      alert(err.message || 'Consent recording failed');
+    }
   };
 
   const handleStartRecording = async () => {
@@ -82,21 +94,30 @@ export function App() {
     const finalSegs = captured.length > 0 ? captured : segments;
     setScreen('PROCESSING');
 
-    const result = await submitTranscriptAndProcess(meetingId, finalSegs, clinicianName, clientRef, templateType, sessionFormat);
-    setExtractionResult(result);
+    try {
+      const result = await submitTranscriptAndProcess(meetingId, finalSegs, clinicianName, clientRef, templateType, sessionFormat);
+      setExtractionResult(result);
 
-    setTimeout(() => {
-      setScreen('REVIEW');
-    }, 1500);
+      setTimeout(() => {
+        setScreen('REVIEW');
+      }, 1500);
+    } catch (err: any) {
+      alert(err.message || 'Transcript processing failed');
+      setScreen('RECORDING');
+    }
   };
 
   const handleApprove = async () => {
-    const approval = await approveReview(meetingId, clinicianName);
-    setDownloadLinks({
-      pdfUrl: approval.pdfUrl || `${API_BASE_URL}/api/documents/download/${meetingId}.pdf`,
-      docxUrl: approval.docxUrl || `${API_BASE_URL}/api/documents/download/${meetingId}.docx`
-    });
-    setScreen('COMPLETED');
+    try {
+      const approval = await approveReview(meetingId, clinicianName);
+      setDownloadLinks({
+        pdfUrl: approval.pdfUrl || `${API_BASE_URL}/api/documents/download/${meetingId}.pdf`,
+        docxUrl: approval.docxUrl || `${API_BASE_URL}/api/documents/download/${meetingId}.docx`
+      });
+      setScreen('COMPLETED');
+    } catch (err: any) {
+      alert(err.message || 'Approval failed');
+    }
   };
 
   const formatTimer = (sec: number) => {
