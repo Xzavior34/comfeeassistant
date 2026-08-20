@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "description": "AI-Powered Accessibility & Wheelchair Documentation Assistant for UK Clinicians",
   "main": "dist/server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "prisma generate && tsc",
     "postinstall": "prisma generate && tsc",
     "start": "node dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "typecheck": "tsc --noEmit",
+    "deployment:check": "node scripts/deployment-preflight.js",
     "test": "jest --runInBand",
     "eval": "ts-node evaluation/runEval.ts",
     "db:generate": "prisma generate",
