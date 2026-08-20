@@ -22,7 +22,7 @@ export class GroundingValidator {
     let groundedClaimsCount = 0;
     const rejectedClaims: { claimValue: string; reason: string }[] = [];
 
-    const categories: (keyof Omit<StructuredClinicalExtraction, 'unstatedOrMissingFields'>)[] = [
+    const categories: ('clientConcerns' | 'accessibilityBarriers' | 'wheelchairSeatingConcerns' | 'matAssessmentInfo' | 'actionsAndRecommendations')[] = [
       'clientConcerns',
       'accessibilityBarriers',
       'wheelchairSeatingConcerns',

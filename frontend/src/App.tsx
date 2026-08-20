@@ -282,7 +282,10 @@ export function App() {
         {screen === 'REVIEW' && (
           <div style={styles.card}>
             <h2>Clinician Review & Evidence Grounding Verification</h2>
-            <p style={styles.hint}>Side-by-Side Verification of Authoritative Source vs Structured Draft</p>
+            <div style={{ backgroundColor: '#1e3a8a', color: '#93c5fd', padding: '10px 14px', borderRadius: '6px', marginBottom: '16px', fontSize: '13px', fontWeight: 'bold' }}>
+              ⚠️ AI-generated draft — clinician review required
+            </div>
+            <p style={styles.hint}>Side-by-Side Verification of Authoritative Source vs Structured Professional Clinical Note</p>
 
             <div style={styles.sideBySideGrid}>
               <div style={styles.reviewCol}>
@@ -297,19 +300,19 @@ export function App() {
               </div>
 
               <div style={styles.reviewCol}>
-                <h3 style={{ color: '#4ade80' }}>2. AI Evidence-Grounded Note (Gemini 1.5 Pro)</h3>
+                <h3 style={{ color: '#4ade80' }}>2. Professional Clinical Note Draft</h3>
                 <div style={styles.scrollBox}>
-                  <p><strong>Client Summary:</strong> {extractionResult?.validatedNote?.clientSummary || 'Client reports sacral pressure sores in standard seating.'}</p>
-                  <p><strong>Accessibility Barriers:</strong></p>
+                  <p><strong>Client Reported Information:</strong> {extractionResult?.validatedNote?.clientConcerns?.[0]?.value || 'Client reports sacral pressure sores in standard seating.'}</p>
+                  <p><strong>Environmental & Equipment Factors:</strong></p>
                   <ul>
-                    {(extractionResult?.validatedNote?.accessibilityBarriers || ['2 entrance steps', '680mm bathroom door']).map((b: string, i: number) => (
-                      <li key={i}>{b} [Seg #{i + 1}]</li>
+                    {(extractionResult?.validatedNote?.accessibilityBarriers || [{ value: '2 entrance steps' }, { value: '680mm bathroom door' }]).map((b: any, i: number) => (
+                      <li key={i}>{typeof b === 'string' ? b : b.value} [Seg #{i + 1}]</li>
                     ))}
                   </ul>
-                  <p><strong>MAT Evaluation Findings:</strong></p>
+                  <p><strong>Assessment Findings:</strong></p>
                   <ul>
-                    {(extractionResult?.validatedNote?.matEvaluation || ['15° posterior pelvic tilt']).map((m: string, i: number) => (
-                      <li key={i}>{m}</li>
+                    {(extractionResult?.validatedNote?.matAssessmentInfo || [{ value: '15° posterior pelvic tilt' }]).map((m: any, i: number) => (
+                      <li key={i}>{typeof m === 'string' ? m : m.value}</li>
                     ))}
                   </ul>
                 </div>
@@ -328,8 +331,11 @@ export function App() {
         {screen === 'COMPLETED' && (
           <div style={{ ...styles.card, textAlign: 'center' }}>
             <div style={{ fontSize: '48px', color: '#22c55e', marginBottom: '10px' }}>✅</div>
-            <h2>Clinical Documentation Signed & Approved</h2>
-            <p style={styles.hint}>PDF and DOCX clinical notes generated and secured in Supabase Storage.</p>
+            <h2>Clinician-Approved Clinical Note</h2>
+            <div style={{ backgroundColor: '#14532d', color: '#86efac', padding: '10px 14px', borderRadius: '6px', marginBottom: '16px', fontSize: '13px', fontWeight: 'bold', display: 'inline-block' }}>
+              ✅ Clinician-approved clinical note
+            </div>
+            <p style={styles.hint}>PDF and DOCX professional clinical notes generated and secured in Supabase Storage.</p>
 
             {downloadLinks && (
               <div style={styles.downloadRow}>

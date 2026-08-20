@@ -23,13 +23,13 @@ export class DocumentGeneratorService {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', (err: any) => reject(err));
 
-      // PDF Header
-      doc.fontSize(20).text('Vabatim Clinical Documentation', { align: 'center' });
-      doc.fontSize(12).text('UK NHS Seating & Accessibility Assessment Report', { align: 'center' });
+      // PDF Header - Professional Clinical Note Title
+      doc.fontSize(20).text('Professional Clinical Note', { align: 'center' });
+      doc.fontSize(12).text('Evidence-Grounded UK NHS Seating & Mobility Documentation', { align: 'center' });
       doc.moveDown();
 
       // Governance Disclaimer Banner
-      doc.fontSize(9).fillColor('red').text('REQUIRES ORGANISATIONAL / LEGAL / DPO REVIEW - CONFIDENTIAL CLINICAL DRAFT', { align: 'center' });
+      doc.fontSize(9).fillColor('red').text('CLINICIAN-VERIFIED DOCUMENTATION - CONFIDENTIAL MEDICAL RECORD', { align: 'center' });
       doc.fillColor('black').moveDown();
 
       // Metadata Section
@@ -37,7 +37,7 @@ export class DocumentGeneratorService {
       doc.text(`Clinician: ${meta.clinicianName}`);
       doc.text(`Client Reference: ${meta.clientReference}`);
       doc.text(`Organisation: ${meta.organisationName}`);
-      doc.text(`Date of Assessment: ${meta.meetingDate}`);
+      doc.text(`Date of Contact: ${meta.meetingDate}`);
       doc.text(`Approved By: ${meta.approvedBy} on ${meta.approvedAt}`);
       doc.moveDown();
 
@@ -58,11 +58,11 @@ export class DocumentGeneratorService {
         doc.moveDown();
       };
 
-      renderSection('Client Reported Concerns & Symptoms', noteData.clientConcerns);
-      renderSection('Environmental Accessibility Barriers', noteData.accessibilityBarriers);
+      renderSection('Client Reported Information & Concerns', noteData.clientReportedInformation || noteData.clientConcerns);
+      renderSection('Environmental & Equipment Factors', noteData.equipmentAndEnvironment || noteData.accessibilityBarriers);
       renderSection('Wheelchair & Seating Requirements', noteData.wheelchairSeatingConcerns);
-      renderSection('Mechanical Assessment Tool (MAT) Findings', noteData.matAssessmentInfo);
-      renderSection('Recommendations & Action Plan', noteData.actionsAndRecommendations);
+      renderSection('Assessment Findings & Physical Evaluation', noteData.assessmentFindings || noteData.matAssessmentInfo);
+      renderSection('Plan & Clinical Next Steps', noteData.planAndNextSteps || noteData.actionsAndRecommendations);
 
       doc.end();
     });
@@ -74,7 +74,7 @@ export class DocumentGeneratorService {
         {
           children: [
             new Paragraph({
-              text: 'Vabatim Clinical Accessibility Report',
+              text: 'Professional Clinical Note',
               heading: HeadingLevel.HEADING_1
             }),
             new Paragraph({
@@ -88,20 +88,20 @@ export class DocumentGeneratorService {
                 new TextRun({ text: `Approved By: ${meta.approvedBy} (${meta.approvedAt})\n` })
               ]
             }),
-            new Paragraph({ text: 'Client Reported Concerns', heading: HeadingLevel.HEADING_3 }),
-            ...noteData.clientConcerns.map((c) => new Paragraph({ text: `• ${c.value}` })),
+            new Paragraph({ text: 'Client Reported Information', heading: HeadingLevel.HEADING_3 }),
+            ...(noteData.clientReportedInformation || noteData.clientConcerns).map((c) => new Paragraph({ text: `• ${c.value}` })),
 
-            new Paragraph({ text: 'Environmental Accessibility Barriers', heading: HeadingLevel.HEADING_3 }),
-            ...noteData.accessibilityBarriers.map((c) => new Paragraph({ text: `• ${c.value}` })),
+            new Paragraph({ text: 'Environmental & Equipment Factors', heading: HeadingLevel.HEADING_3 }),
+            ...(noteData.equipmentAndEnvironment || noteData.accessibilityBarriers).map((c) => new Paragraph({ text: `• ${c.value}` })),
 
             new Paragraph({ text: 'Wheelchair & Seating Requirements', heading: HeadingLevel.HEADING_3 }),
             ...noteData.wheelchairSeatingConcerns.map((c) => new Paragraph({ text: `• ${c.value}` })),
 
-            new Paragraph({ text: 'MAT Physical Assessment Findings', heading: HeadingLevel.HEADING_3 }),
-            ...noteData.matAssessmentInfo.map((c) => new Paragraph({ text: `• ${c.value}` })),
+            new Paragraph({ text: 'Assessment Findings & Physical Evaluation', heading: HeadingLevel.HEADING_3 }),
+            ...(noteData.assessmentFindings || noteData.matAssessmentInfo).map((c) => new Paragraph({ text: `• ${c.value}` })),
 
-            new Paragraph({ text: 'Clinical Actions & Recommendations', heading: HeadingLevel.HEADING_3 }),
-            ...noteData.actionsAndRecommendations.map((c) => new Paragraph({ text: `• ${c.value}` }))
+            new Paragraph({ text: 'Plan & Clinical Next Steps', heading: HeadingLevel.HEADING_3 }),
+            ...(noteData.planAndNextSteps || noteData.actionsAndRecommendations).map((c) => new Paragraph({ text: `• ${c.value}` }))
           ]
         }
       ]
