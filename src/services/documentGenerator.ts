@@ -80,8 +80,8 @@ export class DocumentGeneratorService {
 
   async generateDOCX(meta: ClinicalDocumentMetadata, noteData: StructuredClinicalExtraction): Promise<Buffer> {
     const titleText = noteData.templateType === 'REVIEW'
-      ? 'WHEELCHAIR & SEATING CLINICAL NOTE - REVIEW APPOINTMENT'
-      : 'WHEELCHAIR & SEATING CLINICAL NOTE - INITIAL ASSESSMENT';
+      ? 'PROFESSIONAL CLINICAL NOTE - REVIEW APPOINTMENT'
+      : 'PROFESSIONAL CLINICAL NOTE - INITIAL ASSESSMENT';
 
     const renderDocxSection = (headingText: string, items?: EvidenceLinkedClaim[]) => {
       const paragraphs = [
