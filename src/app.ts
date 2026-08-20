@@ -16,6 +16,7 @@ import transcriptRoutes from './routes/transcripts';
 import reviewRoutes from './routes/reviews';
 import documentRoutes from './routes/documents';
 import auditRoutes from './routes/audit';
+import metricsRoutes from './routes/metrics';
 
 const app = express();
 
@@ -118,6 +119,7 @@ app.use('/api/transcripts', transcriptRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/metrics', metricsRoutes);
 
 // Centralized Error Handling
 app.use(errorHandler);

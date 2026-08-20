@@ -39,6 +39,25 @@ router.put('/:meetingId', requireRole(UserRole.CLINICIAN), (req: AuthenticatedRe
 
   if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
 
+  // Save the original AI draft if this is the first edit
+  if (!meeting.noteVersions) {
+    meeting.noteVersions = [{
+      versionNumber: 1,
+      structuredJson: meeting.validatedNote,
+      authorType: 'AI',
+      createdAt: new Date().toISOString()
+    }];
+  }
+
+  // Add the edited version
+  meeting.noteVersions.push({
+    versionNumber: meeting.noteVersions.length + 1,
+    structuredJson: updatedNote,
+    authorType: 'CLINICIAN',
+    authorId: req.user!.id,
+    createdAt: new Date().toISOString()
+  });
+
   meeting.validatedNote = updatedNote;
   meeting.status = MeetingState.UNDER_REVIEW;
 
@@ -67,13 +86,30 @@ router.post('/:meetingId/approve', requireRole(UserRole.CLINICIAN), async (req: 
   meeting.status = MeetingState.APPROVED;
   const approvalTimestamp = new Date().toISOString();
 
+  // If there were no edits, make sure we still record the initial AI version before calculating metrics
+  if (!meeting.noteVersions) {
+    meeting.noteVersions = [{
+      versionNumber: 1,
+      structuredJson: meeting.validatedNote,
+      authorType: 'AI',
+      createdAt: approvalTimestamp
+    }];
+  }
+  
+  // Compute metrics from the original AI draft (version 1) and the final approved note
+  const { metricsService } = await import('../services/metricsService');
+  const originalDraft = meeting.noteVersions[0].structuredJson;
+  const metrics = metricsService.calculateEditDistance(originalDraft, meeting.validatedNote);
+  meeting.noteMetrics = metrics;
+
   const noteHash = crypto.createHash('sha256').update(JSON.stringify(meeting.validatedNote)).digest('hex');
 
   meeting.approvalRecord = {
     approvedBy: req.user!.email,
     approvedAt: approvalTimestamp,
     noteHash,
-    documentVersion: 'Approved v1.0'
+    documentVersion: 'Approved v1.0',
+    metrics
   };
 
   auditLogger.log({
@@ -82,7 +118,7 @@ router.post('/:meetingId/approve', requireRole(UserRole.CLINICIAN), async (req: 
     eventType: 'NOTE_APPROVED',
     resourceType: 'ClinicalNote',
     resourceId: meetingId,
-    details: { noteHash, approvedBy: req.user!.email }
+    details: { noteHash, approvedBy: req.user!.email, metrics }
   });
 
   res.json({

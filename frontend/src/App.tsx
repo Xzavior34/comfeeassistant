@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL, checkApiHealth, loginClinician, createMeeting, recordConsent, submitTranscriptAndProcess, approveReview } from './services/api';
 import { deviceSpeech, SpeechSegment } from './services/speech';
+import { MetricsDashboard } from './components/MetricsDashboard';
 
-type Screen = 'LOGIN' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'REVIEW' | 'COMPLETED';
+type Screen = 'LOGIN' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'REVIEW' | 'COMPLETED' | 'METRICS';
 type TemplateType = 'INITIAL_ASSESSMENT' | 'REVIEW';
 type SessionFormat = 'FACE_TO_FACE' | 'VIRTUAL';
 
@@ -208,7 +209,18 @@ export function App() {
               <button onClick={handleCreateMeeting} style={styles.primaryButton}>
                 Proceed to Participant Consent
               </button>
+              <button onClick={() => setScreen('METRICS')} style={{...styles.secondaryButton, marginTop: '10px'}}>
+                View Documentation Quality Metrics
+              </button>
             </div>
+          </div>
+        )}
+
+        {/* METRICS DASHBOARD */}
+        {screen === 'METRICS' && (
+          <div style={styles.card}>
+            <button onClick={() => setScreen('MEETINGS')} style={styles.secondaryButton}>← Back to Meetings</button>
+            <MetricsDashboard />
           </div>
         )}
 
