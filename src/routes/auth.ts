@@ -22,23 +22,30 @@ router.post('/login', async (req: Request, res: Response) => {
     // Auto-registration feature: if user doesn't exist, create them automatically.
     // Also, if credentials mismatch, we just return invalid credentials.
     if (!user) {
-      // Find or create default organisation
-      let defaultOrg = await prisma.organisation.findUnique({ where: { code: 'DEFAULT-ORG' } });
-      if (!defaultOrg) {
-        defaultOrg = await prisma.organisation.create({
-          data: { name: 'Default Organisation', code: 'DEFAULT-ORG' }
-        });
-      }
+      // Find or create default organisation safely
+      let defaultOrg = await prisma.organisation.upsert({
+        where: { code: 'DEFAULT-ORG' },
+        update: {},
+        create: { name: 'Default Organisation', code: 'DEFAULT-ORG' }
+      });
       
       const passwordHash = await bcrypt.hash(password, 10);
-      user = await prisma.user.create({
-        data: {
-          email,
-          passwordHash,
-          fullName: email.split('@')[0], // Derive name from email
-          organisationId: defaultOrg.id
-        }
-      });
+      try {
+        user = await prisma.user.upsert({
+          where: { email },
+          update: {},
+          create: {
+            email,
+            passwordHash,
+            fullName: email.split('@')[0], // Derive name from email
+            organisationId: defaultOrg.id
+          }
+        });
+      } catch (err) {
+        // Fallback in case upsert race condition still triggers
+        user = await prisma.user.findUnique({ where: { email } });
+        if (!user) throw err;
+      }
     } else {
       if (!bcrypt.compareSync(password, user.passwordHash)) {
         return res.status(401).json({ error: 'Invalid credentials.' });
