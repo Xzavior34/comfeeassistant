@@ -1,6 +1,5 @@
 import { ProviderTranscript, CanonicalTranscriptSegment } from '../types';
 import { ParticipantRole, OverlapStatus } from '@prisma/client';
-import { randomUUID } from 'crypto';
 
 export function normalizeToCanonicalTranscript(
   meetingId: string,
@@ -22,6 +21,13 @@ export function normalizeToCanonicalTranscript(
 
     const mappedRole = roleMap[seg.speakerId] || null;
 
+    // Calculate speaking rate (words per second)
+    const wordCount = seg.text.trim().split(/\s+/).filter(Boolean).length;
+    const durationSeconds = Math.max(0.5, (seg.endTimeMs - seg.startTimeMs) / 1000);
+    const speakingRateWps = parseFloat((wordCount / durationSeconds).toFixed(2));
+
+    const rapidSpeechDetected = speakingRateWps > 4.0 || (seg.confidence !== null && seg.confidence < 0.75);
+
     let textContent = seg.text;
     if (overlapStatus === OverlapStatus.SUSPECTED && (seg.confidence === null || seg.confidence < 0.6)) {
       textContent += ' [Overlapping speech / transcription uncertainty]';
@@ -38,7 +44,9 @@ export function normalizeToCanonicalTranscript(
       confidence: seg.confidence,
       overlapStatus,
       sourceProvider: rawTranscript.providerName,
-      sourceSegmentId: `raw-${idx + 1}`
+      sourceSegmentId: `raw-${idx + 1}`,
+      rapidSpeechDetected,
+      speakingRateWps
     };
   });
 }

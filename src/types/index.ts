@@ -52,6 +52,8 @@ export interface CanonicalTranscriptSegment {
   overlapStatus: 'CLEAR' | 'SUSPECTED' | 'UNKNOWN';
   sourceProvider: string;
   sourceSegmentId: string | null;
+  rapidSpeechDetected?: boolean;
+  speakingRateWps?: number;
 }
 
 export interface EvidenceReference {
@@ -68,6 +70,8 @@ export interface EvidenceLinkedClaim {
   sourceClassification?: SourceClassification;
   rawMeasurement?: string | null;
   isCorrected?: boolean;
+  rawText?: string;
+  uncertaintyReason?: string;
 }
 
 export interface ProcessingFailureWarnings {
@@ -78,6 +82,7 @@ export interface ProcessingFailureWarnings {
   missingSpeakerIdentification?: boolean;
   geminiProcessingFailure?: boolean;
   groundingValidationFailure?: boolean;
+  rapidSpeechWarning?: boolean;
   warningMessages: string[];
 }
 

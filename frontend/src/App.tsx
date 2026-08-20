@@ -310,7 +310,12 @@ export function App() {
               ⚠️ AI-generated draft — clinician review required
             </div>
 
-            {extractionResult?.validatedNote?.warnings?.warningMessages?.length > 0 && (
+            {extractionResult?.validatedNote?.warnings?.rapidSpeechWarning && (
+              <div style={styles.warningBanner}>
+                ⚠️ <strong>Rapid Speech Warning:</strong> Some speech may have been unclear or incorrectly transcribed. Please review the highlighted section against the original conversation.
+              </div>
+            )}
+            {extractionResult?.validatedNote?.warnings?.warningMessages?.length > 0 && !extractionResult?.validatedNote?.warnings?.rapidSpeechWarning && (
               <div style={styles.warningBanner}>
                 ⚠️ <strong>Pipeline Warning:</strong> {extractionResult.validatedNote.warnings.warningMessages.join(' | ')}
               </div>

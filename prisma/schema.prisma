@@ -176,6 +176,8 @@ model ClinicalNote {
   approvedById   String?
   approvedBy     User?      @relation("ApprovedNotes", fields: [approvedById], references: [id])
   evidenceItems  Evidence[]
+  versions       ClinicalNoteVersion[] @relation("NoteVersions")
+  metrics        ClinicalNoteMetrics?  @relation("NoteMetrics")
 }
 
 model Evidence {
@@ -203,4 +205,31 @@ model AuditLog {
   clientIp       String?
   timestamp      DateTime     @default(now())
   recordHash     String?
+}
+
+model ClinicalNoteVersion {
+  id             String       @id @default(uuid())
+  clinicalNoteId String
+  clinicalNote   ClinicalNote @relation("NoteVersions", fields: [clinicalNoteId], references: [id], onDelete: Cascade)
+  versionNumber  Int
+  structuredJson Json
+  authorType     String       // AI | CLINICIAN
+  authorId       String?      // clinician user id
+  status         NoteStatus
+  createdAt      DateTime     @default(now())
+}
+
+model ClinicalNoteMetrics {
+  id                       String       @id @default(uuid())
+  clinicalNoteId           String       @unique
+  clinicalNote             ClinicalNote @relation("NoteMetrics", fields: [clinicalNoteId], references: [id], onDelete: Cascade)
+  editClassification       String       // UNCHANGED | MINOR_EDIT | SUBSTANTIAL_EDIT
+  reviewDurationMs         Int?
+  sectionsChangedCount     Int
+  totalAdditions           Int
+  totalRemovals            Int
+  speechCorrectionsProposed Int
+  speechCorrectionsAccepted Int
+  groundingViolations      Int
+  createdAt                DateTime     @default(now())
 }

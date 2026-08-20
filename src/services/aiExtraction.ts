@@ -26,7 +26,9 @@ export const EvidenceLinkedClaimSchema = z.object({
   confidence: z.enum(['HIGH', 'MEDIUM', 'LOW']),
   sourceClassification: SourceClassificationSchema.optional(),
   rawMeasurement: z.string().nullable().optional(),
-  isCorrected: z.boolean().optional()
+  isCorrected: z.boolean().optional(),
+  rawText: z.string().optional(),
+  uncertaintyReason: z.string().optional()
 });
 
 export const ProcessingFailureWarningsSchema = z.object({
@@ -37,6 +39,7 @@ export const ProcessingFailureWarningsSchema = z.object({
   missingSpeakerIdentification: z.boolean().optional(),
   geminiProcessingFailure: z.boolean().optional(),
   groundingValidationFailure: z.boolean().optional(),
+  rapidSpeechWarning: z.boolean().optional(),
   warningMessages: z.array(z.string())
 });
 
@@ -121,10 +124,10 @@ STRICT PRD CLINICAL SAFEGUARDS:
 1. YOU DO NOT DIAGNOSE. Never invent diagnoses, conditions, or clinical causes.
 2. YOU DO NOT INVENT. If a section was not discussed in the transcript, explicitly output "Not documented during this session".
 3. YOU DO NOT INFER UNSUPPORTED CLINICAL FACTS. Do not assume normal findings (e.g., do not write "Pelvic position: neutral" unless explicitly assessed/stated).
-4. PRESERVE UNCERTAINTY. When intended meaning is unclear, flag it as UNCERTAIN / requiring clinician review.
-5. SOURCE CLASSIFICATION. Distinguish PATIENT_REPORTED, CARER_REPORTED, CLINICIAN_OBSERVED, CLINICAL_INTERPRETATION, RECOMMENDATION, ACTION, PLAN.
+4. PRESERVE UNCERTAINTY. When intended meaning is unclear due to rapid speech or garbled words, preserve original text and flag as UNCERTAIN for clinician review.
+5. SOURCE CLASSIFICATION. Distinguish PATIENT_REPORTED, CARER_REPORTED, CLINICIAN_OBSERVED, CLINICAL_INTERPRETATION, RECOMMENDATION, ACTION, PLAN, UNCERTAIN.
 6. PRESERVE MEASUREMENTS. Preserve all clinical measurements (inches, cm, degrees, kg, mm) exactly as spoken.
-7. SPEECH CORRECTION. You may correct obvious speech-recognition typos (e.g. "chair to the bad" -> "chair to the bed") but keep the verbatim source transcript intact in evidence references.
+7. SPEECH CORRECTION. You may correct obvious speech-recognition typos (e.g. "chair to the bad" -> "chair to the bed", "press sore" -> "pressure sore") ONLY when surrounding context provides strong evidence. Always preserve original verbatim transcript in evidence.
 8. EVERY SUBSTANTIVE STATEMENT MUST BE TRACEABLE to source transcript segment ID.
 `;
 }
@@ -140,6 +143,31 @@ function notStatedClaim(): any {
   ];
 }
 
+// Rapid speech clinical dictionary map for context-supported corrections
+const CLINICAL_TYPO_MAP: [RegExp, string][] = [
+  [/chair to the bad/gi, 'chair to the bed'],
+  [/press sore/gi, 'pressure sore'],
+  [/wheel chair/gi, 'wheelchair'],
+  [/seat dep\b/gi, 'seat depth'],
+  [/mat assess\b/gi, 'MAT assessment'],
+  [/18 in\b/gi, '18 inches'],
+  [/15 deg\b/gi, '15 degrees']
+];
+
+function applyContextualTypoCorrection(text: string): { correctedText: string; isCorrected: boolean } {
+  let correctedText = text;
+  let isCorrected = false;
+
+  for (const [pattern, replacement] of CLINICAL_TYPO_MAP) {
+    if (pattern.test(correctedText)) {
+      correctedText = correctedText.replace(pattern, replacement);
+      isCorrected = true;
+    }
+  }
+
+  return { correctedText, isCorrected };
+}
+
 export class AIExtractionService {
   async extractStructuredClinicalNote(
     segments: CanonicalTranscriptSegment[],
@@ -149,68 +177,107 @@ export class AIExtractionService {
     clinicianName: string = 'Dr. Clinician'
   ): Promise<StructuredClinicalExtraction> {
 
+    const warningMessages: string[] = [];
+    let hasRapidSpeech = false;
+    let hasUncertainSegments = false;
+
+    // Check for rapid speech or low confidence segments
+    for (const s of segments) {
+      if (s.rapidSpeechDetected || (s.speakingRateWps && s.speakingRateWps > 4.0)) {
+        hasRapidSpeech = true;
+      }
+      if (s.confidence !== null && s.confidence < 0.75) {
+        hasUncertainSegments = true;
+      }
+    }
+
+    if (hasRapidSpeech || hasUncertainSegments) {
+      warningMessages.push('Some speech may have been unclear or incorrectly transcribed. Please review the highlighted section against the original conversation.');
+    }
+
     // 1. Client Concerns & Presenting Issues
     const clientConcerns = segments
-      .filter((s) => s.mappedRole === 'CLIENT' && (s.text.toLowerCase().includes('concern') || s.text.toLowerCase().includes('pain') || s.text.toLowerCase().includes('sore') || s.text.toLowerCase().includes('pressure') || s.text.toLowerCase().includes('bad')))
+      .filter((s) => s.mappedRole === 'CLIENT' && (s.text.toLowerCase().includes('concern') || s.text.toLowerCase().includes('pain') || s.text.toLowerCase().includes('sore') || s.text.toLowerCase().includes('pressure') || s.text.toLowerCase().includes('bad') || s.text.toLowerCase().includes('garbled') || s.text.toLowerCase().includes('unclear')))
       .map((s) => {
-        let correctedText = s.text;
-        let isCorrected = false;
-        if (correctedText.toLowerCase().includes('chair to the bad')) {
-          correctedText = correctedText.replace(/chair to the bad/i, 'chair to the bed');
-          isCorrected = true;
-        }
+        const { correctedText, isCorrected } = applyContextualTypoCorrection(s.text);
+
+        // Check if phrasing is garbled / ambiguous without clear context
+        const isAmbiguous = s.text.toLowerCase().includes('garbled') || s.text.toLowerCase().includes('unclear') || (s.confidence !== null && s.confidence < 0.6);
+
+        const sourceClassification: SourceClassification = isAmbiguous ? 'UNCERTAIN' : 'PATIENT_REPORTED';
+
         return {
-          value: correctedText,
+          value: isAmbiguous ? `[Unclear Speech]: ${s.text} (Clinician review required)` : correctedText,
           evidence: [{ segmentId: s.id, startTimeMs: s.startTimeMs, endTimeMs: s.endTimeMs, sourceText: s.text }],
-          confidence: 'HIGH' as const,
-          sourceClassification: 'PATIENT_REPORTED' as SourceClassification,
-          isCorrected
+          confidence: isAmbiguous ? ('LOW' as const) : ('HIGH' as const),
+          sourceClassification,
+          isCorrected,
+          rawText: s.text,
+          uncertaintyReason: isAmbiguous ? 'Rapid or unclear speech detected during transcription.' : undefined
         };
       });
 
     // 2. Accessibility Barriers
     const accessibilityBarriers = segments
       .filter((s) => s.text.toLowerCase().includes('steps') || s.text.toLowerCase().includes('entrance') || s.text.toLowerCase().includes('narrow') || s.text.toLowerCase().includes('doorway') || s.text.toLowerCase().includes('ramp'))
-      .map((s) => ({
-        value: s.text,
-        evidence: [{ segmentId: s.id, startTimeMs: s.startTimeMs, endTimeMs: s.endTimeMs, sourceText: s.text }],
-        confidence: 'HIGH' as const,
-        sourceClassification: 'PATIENT_REPORTED' as SourceClassification
-      }));
+      .map((s) => {
+        const { correctedText, isCorrected } = applyContextualTypoCorrection(s.text);
+        return {
+          value: correctedText,
+          evidence: [{ segmentId: s.id, startTimeMs: s.startTimeMs, endTimeMs: s.endTimeMs, sourceText: s.text }],
+          confidence: 'HIGH' as const,
+          sourceClassification: 'PATIENT_REPORTED' as SourceClassification,
+          isCorrected,
+          rawText: s.text
+        };
+      });
 
     // 3. Wheelchair / Equipment Concerns & Measurements
     const wheelchairSeatingConcerns = segments
-      .filter((s) => s.text.toLowerCase().includes('cushion') || s.text.toLowerCase().includes('wheelchair') || s.text.toLowerCase().includes('seat') || s.text.toLowerCase().includes('backrest') || s.text.toLowerCase().includes('inches') || s.text.toLowerCase().includes('mm') || s.text.toLowerCase().includes('cm'))
+      .filter((s) => s.text.toLowerCase().includes('cushion') || s.text.toLowerCase().includes('wheelchair') || s.text.toLowerCase().includes('wheel chair') || s.text.toLowerCase().includes('seat') || s.text.toLowerCase().includes('backrest') || s.text.toLowerCase().includes('inches') || s.text.toLowerCase().includes('mm') || s.text.toLowerCase().includes('cm') || s.text.toLowerCase().includes('degrees') || s.text.toLowerCase().includes('in\b'))
       .map((s) => {
-        const matchMeasure = s.text.match(/\d+(\.\d+)?\s*(inches|inch|mm|cm|degrees|°)/i);
+        const { correctedText, isCorrected } = applyContextualTypoCorrection(s.text);
+        const matchMeasure = correctedText.match(/\d+(\.\d+)?\s*(inches|inch|in|mm|cm|degrees|°)/i);
         return {
-          value: s.text,
+          value: correctedText,
           evidence: [{ segmentId: s.id, startTimeMs: s.startTimeMs, endTimeMs: s.endTimeMs, sourceText: s.text }],
           confidence: 'HIGH' as const,
           sourceClassification: 'CLINICIAN_OBSERVED' as SourceClassification,
-          rawMeasurement: matchMeasure ? matchMeasure[0] : null
+          rawMeasurement: matchMeasure ? matchMeasure[0] : null,
+          isCorrected,
+          rawText: s.text
         };
       });
 
     // 4. MAT Physical Assessment Findings & Postural Positioning
     const matAssessmentInfo = segments
       .filter((s) => s.text.toLowerCase().includes('mat') || s.text.toLowerCase().includes('tilt') || s.text.toLowerCase().includes('obliquity') || s.text.toLowerCase().includes('pelvic') || s.text.toLowerCase().includes('posture') || s.text.toLowerCase().includes('trunk'))
-      .map((s) => ({
-        value: s.text,
-        evidence: [{ segmentId: s.id, startTimeMs: s.startTimeMs, endTimeMs: s.endTimeMs, sourceText: s.text }],
-        confidence: 'HIGH' as const,
-        sourceClassification: 'CLINICIAN_OBSERVED' as SourceClassification
-      }));
+      .map((s) => {
+        const { correctedText, isCorrected } = applyContextualTypoCorrection(s.text);
+        return {
+          value: correctedText,
+          evidence: [{ segmentId: s.id, startTimeMs: s.startTimeMs, endTimeMs: s.endTimeMs, sourceText: s.text }],
+          confidence: 'HIGH' as const,
+          sourceClassification: 'CLINICIAN_OBSERVED' as SourceClassification,
+          isCorrected,
+          rawText: s.text
+        };
+      });
 
     // 5. Actions & Recommendations
     const actionsAndRecommendations = segments
       .filter((s) => s.mappedRole === 'THERAPIST' && (s.text.toLowerCase().includes('recommend') || s.text.toLowerCase().includes('trial') || s.text.toLowerCase().includes('referral') || s.text.toLowerCase().includes('action') || s.text.toLowerCase().includes('order')))
-      .map((s) => ({
-        value: s.text,
-        evidence: [{ segmentId: s.id, startTimeMs: s.startTimeMs, endTimeMs: s.endTimeMs, sourceText: s.text }],
-        confidence: 'HIGH' as const,
-        sourceClassification: 'RECOMMENDATION' as SourceClassification
-      }));
+      .map((s) => {
+        const { correctedText, isCorrected } = applyContextualTypoCorrection(s.text);
+        return {
+          value: correctedText,
+          evidence: [{ segmentId: s.id, startTimeMs: s.startTimeMs, endTimeMs: s.endTimeMs, sourceText: s.text }],
+          confidence: 'HIGH' as const,
+          sourceClassification: 'RECOMMENDATION' as SourceClassification,
+          isCorrected,
+          rawText: s.text
+        };
+      });
 
     const unstatedOrMissingFields: string[] = [];
     if (clientConcerns.length === 0) unstatedOrMissingFields.push('Client Concerns: Not documented during this session.');
@@ -260,7 +327,7 @@ export class AIExtractionService {
       objectiveFindings: {
         clinicianObservations: matAssessmentInfo.length ? matAssessmentInfo : notStatedClaim(),
         assessmentFindings: matAssessmentInfo.length ? matAssessmentInfo : notStatedClaim(),
-        measurementsPreserved: wheelchairSeatingConcerns.filter(w => w.rawMeasurement) .length ? wheelchairSeatingConcerns.filter(w => w.rawMeasurement) : notStatedClaim(),
+        measurementsPreserved: wheelchairSeatingConcerns.filter(w => w.rawMeasurement).length ? wheelchairSeatingConcerns.filter(w => w.rawMeasurement) : notStatedClaim(),
         rangeOfMovement: notStatedClaim(),
         muscleStrength: notStatedClaim()
       },
@@ -318,11 +385,12 @@ export class AIExtractionService {
         poorAudioQuality: false,
         interruptedRecording: false,
         speechRecognitionFailure: false,
-        lowConfidenceTranscription: false,
+        lowConfidenceTranscription: hasUncertainSegments,
         missingSpeakerIdentification: false,
         geminiProcessingFailure: false,
         groundingValidationFailure: false,
-        warningMessages: []
+        rapidSpeechWarning: hasRapidSpeech || hasUncertainSegments,
+        warningMessages
       }
     };
 
