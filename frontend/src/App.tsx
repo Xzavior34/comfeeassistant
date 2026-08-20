@@ -29,7 +29,7 @@ export function App() {
   useEffect(() => {
     let interval: any;
     if (isListening) {
-      interval = setInterval(() => setTimerSeconds((prev) => prev + 1), 1000);
+      interval = setInterval(() => setTimerSeconds((prev: number) => prev + 1), 1000);
     }
     return () => clearInterval(interval);
   }, [isListening]);
@@ -82,9 +82,9 @@ export function App() {
     setSegments(initialSegments);
 
     deviceSpeech.start(
-      (interim) => setInterimText(interim),
-      (newSegment) => setSegments((prev) => [...prev, newSegment]),
-      (err) => setSpeechError(err)
+      (interim: string) => setInterimText(interim),
+      (newSegment: SpeechSegment) => setSegments((prev: SpeechSegment[]) => [...prev, newSegment]),
+      (err: string) => setSpeechError(err)
     );
   };
 
