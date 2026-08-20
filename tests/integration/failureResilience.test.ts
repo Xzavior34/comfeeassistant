@@ -10,11 +10,18 @@ describe('System Failure Resilience & Graceful Exception Handling', () => {
 
     const token = res.body.token;
 
+    const meetingRes = await request(app)
+      .post('/api/meetings')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ clientReference: 'test-client' });
+    
+    const meetingId = meetingRes.body.meeting.id;
+
     // Consent gate prevents recording upload without consent
     const recordingRes = await request(app)
       .post('/api/recordings/upload')
       .set('Authorization', `Bearer ${token}`)
-      .send({ meetingId: 'demo-meeting-101', sampleRate: 16000 });
+      .send({ meetingId, sampleRate: 16000 });
 
     expect(recordingRes.status).toBe(400);
     expect(recordingRes.body.error).toContain('Consent required');
