@@ -19,9 +19,9 @@ export class DocumentGeneratorService {
       const doc = new PDFDocument({ margin: 50 });
       const chunks: Buffer[] = [];
 
-      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('data', (chunk: any) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', (err) => reject(err));
+      doc.on('error', (err: any) => reject(err));
 
       // PDF Header
       doc.fontSize(20).text('Vabatim Clinical Documentation', { align: 'center' });

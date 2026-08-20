@@ -4,7 +4,7 @@ services:
     name: vabatim-api
     env: node
     region: frankfurt # EU Region closest to UK
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
@@ -29,7 +29,7 @@ services:
     name: vabatim-worker
     env: node
     region: frankfurt
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm run worker
     envVars:
       - key: NODE_ENV
