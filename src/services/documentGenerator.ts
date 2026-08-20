@@ -1,6 +1,6 @@
 import PDFDocument from 'pdfkit';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
-import { StructuredClinicalExtraction } from '../types';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import { StructuredClinicalExtraction, EvidenceLinkedClaim } from '../types';
 
 export interface ClinicalDocumentMetadata {
   meetingId: string;
@@ -23,85 +23,104 @@ export class DocumentGeneratorService {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', (err: any) => reject(err));
 
-      // PDF Header - Professional Clinical Note Title
-      doc.fontSize(20).text('Professional Clinical Note', { align: 'center' });
-      doc.fontSize(12).text('Evidence-Grounded UK NHS Seating & Mobility Documentation', { align: 'center' });
+      const titleText = noteData.templateType === 'REVIEW'
+        ? 'WHEELCHAIR & SEATING CLINICAL NOTE - REVIEW APPOINTMENT'
+        : 'WHEELCHAIR & SEATING CLINICAL NOTE - INITIAL ASSESSMENT';
+
+      // PDF Header
+      doc.fontSize(16).text(titleText, { align: 'center' });
+      doc.fontSize(10).text('Evidence-Grounded Wheelchair Therapy Documentation', { align: 'center' });
       doc.moveDown();
 
-      // Governance Disclaimer Banner
-      doc.fontSize(9).fillColor('red').text('CLINICIAN-VERIFIED DOCUMENTATION - CONFIDENTIAL MEDICAL RECORD', { align: 'center' });
+      // Governance Banner
+      doc.fontSize(8).fillColor('red').text('CLINICIAN-APPROVED MEDICAL RECORD - CONFIDENTIAL', { align: 'center' });
       doc.fillColor('black').moveDown();
 
-      // Metadata Section
-      doc.fontSize(11).text(`Document Version: ${meta.documentVersion}`);
+      // 1. Session Information Table
+      doc.fontSize(11).text(`Client Reference: ${meta.clientReference}`);
       doc.text(`Clinician: ${meta.clinicianName}`);
-      doc.text(`Client Reference: ${meta.clientReference}`);
-      doc.text(`Organisation: ${meta.organisationName}`);
-      doc.text(`Date of Contact: ${meta.meetingDate}`);
+      doc.text(`Session Date: ${meta.meetingDate}`);
+      doc.text(`Appointment Type: ${noteData.templateType || 'INITIAL_ASSESSMENT'}`);
+      doc.text(`Session Format: ${noteData.sessionFormat || 'FACE_TO_FACE'}`);
       doc.text(`Approved By: ${meta.approvedBy} on ${meta.approvedAt}`);
       doc.moveDown();
 
       doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown();
 
-      // Section Helper
-      const renderSection = (title: string, items: { value: string }[]) => {
-        doc.fontSize(14).text(title, { underline: true });
-        doc.moveDown(0.5);
+      const renderSection = (title: string, items?: EvidenceLinkedClaim[]) => {
+        doc.fontSize(12).text(title, { underline: true });
+        doc.moveDown(0.3);
         if (!items || items.length === 0) {
-          doc.fontSize(10).text('• Not stated');
+          doc.fontSize(9).text('• Not documented during this session.');
         } else {
           items.forEach((item) => {
-            doc.fontSize(10).text(`• ${item.value}`);
+            const tag = item.sourceClassification ? `[${item.sourceClassification}] ` : '';
+            doc.fontSize(9).text(`• ${tag}${item.value}`);
           });
         }
-        doc.moveDown();
+        doc.moveDown(0.8);
       };
 
-      renderSection('Client Reported Information & Concerns', noteData.clientReportedInformation || noteData.clientConcerns);
-      renderSection('Environmental & Equipment Factors', noteData.equipmentAndEnvironment || noteData.accessibilityBarriers);
-      renderSection('Wheelchair & Seating Requirements', noteData.wheelchairSeatingConcerns);
-      renderSection('Assessment Findings & Physical Evaluation', noteData.assessmentFindings || noteData.matAssessmentInfo);
-      renderSection('Plan & Clinical Next Steps', noteData.planAndNextSteps || noteData.actionsAndRecommendations);
+      // 11 PRD Structured Sections
+      if (noteData.sessionInfo) renderSection('1. Session & Referral Information', noteData.sessionInfo.reasonForReferral);
+      if (noteData.subjectiveInfo) renderSection('2. Subjective Information & Client Concerns', noteData.subjectiveInfo.presentingConcerns || noteData.clientConcerns);
+      if (noteData.functionalAssessment) renderSection('3. Functional Assessment', noteData.functionalAssessment.mobilityStatus || noteData.accessibilityBarriers);
+      if (noteData.objectiveFindings) renderSection('4. Objective Clinical Findings & Measurements', noteData.objectiveFindings.assessmentFindings || noteData.matAssessmentInfo);
+      if (noteData.seatingPosturalAssessment) renderSection('5. Seating & Postural Assessment', noteData.seatingPosturalAssessment.pelvicPositioning);
+      if (noteData.pressureManagement) renderSection('6. Pressure Management & Cushion Evaluation', noteData.pressureManagement.pressureConcerns);
+      if (noteData.equipmentAssessment) renderSection('7. Current Wheelchair & Seating Equipment', noteData.equipmentAssessment.currentWheelchair || noteData.wheelchairSeatingConcerns);
+      renderSection('8. Clinical Reasoning', noteData.clinicalReasoning);
+      renderSection('9. Recommendations & Clinical Actions', noteData.recommendationsAndActions || noteData.actionsAndRecommendations);
+      renderSection('10. Follow-up & Review Plan', noteData.followUpPlan);
 
       doc.end();
     });
   }
 
   async generateDOCX(meta: ClinicalDocumentMetadata, noteData: StructuredClinicalExtraction): Promise<Buffer> {
+    const titleText = noteData.templateType === 'REVIEW'
+      ? 'WHEELCHAIR & SEATING CLINICAL NOTE - REVIEW APPOINTMENT'
+      : 'WHEELCHAIR & SEATING CLINICAL NOTE - INITIAL ASSESSMENT';
+
+    const renderDocxSection = (headingText: string, items?: EvidenceLinkedClaim[]) => {
+      const paragraphs = [
+        new Paragraph({ text: headingText, heading: HeadingLevel.HEADING_3 })
+      ];
+      if (!items || items.length === 0) {
+        paragraphs.push(new Paragraph({ text: '• Not documented during this session.' }));
+      } else {
+        items.forEach((item: EvidenceLinkedClaim) => {
+          const tag = item.sourceClassification ? `[${item.sourceClassification}] ` : '';
+          paragraphs.push(new Paragraph({ text: `• ${tag}${item.value}` }));
+        });
+      }
+      return paragraphs;
+    };
+
     const doc = new Document({
       sections: [
         {
           children: [
-            new Paragraph({
-              text: 'Professional Clinical Note',
-              heading: HeadingLevel.HEADING_1
-            }),
-            new Paragraph({
-              text: `UK NHS Seating & Mobility Assessment - Doc Version: ${meta.documentVersion}`,
-              heading: HeadingLevel.HEADING_2
-            }),
+            new Paragraph({ text: titleText, heading: HeadingLevel.HEADING_1 }),
+            new Paragraph({ text: `UK NHS Wheelchair Therapy Documentation - Version: ${meta.documentVersion}`, heading: HeadingLevel.HEADING_2 }),
             new Paragraph({
               children: [
                 new TextRun({ text: `Clinician: ${meta.clinicianName}\n` }),
                 new TextRun({ text: `Client Reference: ${meta.clientReference}\n` }),
+                new TextRun({ text: `Session Date: ${meta.meetingDate}\n` }),
                 new TextRun({ text: `Approved By: ${meta.approvedBy} (${meta.approvedAt})\n` })
               ]
             }),
-            new Paragraph({ text: 'Client Reported Information', heading: HeadingLevel.HEADING_3 }),
-            ...(noteData.clientReportedInformation || noteData.clientConcerns).map((c) => new Paragraph({ text: `• ${c.value}` })),
-
-            new Paragraph({ text: 'Environmental & Equipment Factors', heading: HeadingLevel.HEADING_3 }),
-            ...(noteData.equipmentAndEnvironment || noteData.accessibilityBarriers).map((c) => new Paragraph({ text: `• ${c.value}` })),
-
-            new Paragraph({ text: 'Wheelchair & Seating Requirements', heading: HeadingLevel.HEADING_3 }),
-            ...noteData.wheelchairSeatingConcerns.map((c) => new Paragraph({ text: `• ${c.value}` })),
-
-            new Paragraph({ text: 'Assessment Findings & Physical Evaluation', heading: HeadingLevel.HEADING_3 }),
-            ...(noteData.assessmentFindings || noteData.matAssessmentInfo).map((c) => new Paragraph({ text: `• ${c.value}` })),
-
-            new Paragraph({ text: 'Plan & Clinical Next Steps', heading: HeadingLevel.HEADING_3 }),
-            ...(noteData.planAndNextSteps || noteData.actionsAndRecommendations).map((c) => new Paragraph({ text: `• ${c.value}` }))
+            ...renderDocxSection('1. Subjective Information & Client Concerns', noteData.subjectiveInfo?.presentingConcerns || noteData.clientConcerns),
+            ...renderDocxSection('2. Functional Assessment & Environmental Barriers', noteData.functionalAssessment?.mobilityStatus || noteData.accessibilityBarriers),
+            ...renderDocxSection('3. Objective Findings & MAT Assessment', noteData.objectiveFindings?.assessmentFindings || noteData.matAssessmentInfo),
+            ...renderDocxSection('4. Seating & Postural Assessment', noteData.seatingPosturalAssessment?.pelvicPositioning),
+            ...renderDocxSection('5. Pressure Management & Cushion Notes', noteData.pressureManagement?.pressureConcerns),
+            ...renderDocxSection('6. Current Wheelchair & Seating Equipment', noteData.equipmentAssessment?.currentWheelchair || noteData.wheelchairSeatingConcerns),
+            ...renderDocxSection('7. Clinical Reasoning', noteData.clinicalReasoning),
+            ...renderDocxSection('8. Recommendations & Clinical Actions', noteData.recommendationsAndActions || noteData.actionsAndRecommendations),
+            ...renderDocxSection('9. Follow-up & Review Plan', noteData.followUpPlan)
           ]
         }
       ]

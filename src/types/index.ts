@@ -158,6 +158,19 @@ export interface StructuredClinicalExtraction {
   recommendationsAndActions: EvidenceLinkedClaim[];
   followUpPlan: EvidenceLinkedClaim[];
 
+  // Additional Clinical Note Category aliases for maximum compatibility
+  clientReportedInformation?: EvidenceLinkedClaim[];
+  equipmentAndEnvironment?: EvidenceLinkedClaim[];
+  assessmentFindings?: EvidenceLinkedClaim[];
+  planAndNextSteps?: EvidenceLinkedClaim[];
+  reasonForContact?: EvidenceLinkedClaim[];
+  relevantHistory?: EvidenceLinkedClaim[];
+  functionalInformation?: EvidenceLinkedClaim[];
+  observations?: EvidenceLinkedClaim[];
+  interventions?: EvidenceLinkedClaim[];
+  clinicalConsiderations?: EvidenceLinkedClaim[];
+  informationRequiringReview?: EvidenceLinkedClaim[];
+
   // Legacy & Compatibility fields (derived from above)
   clientConcerns: EvidenceLinkedClaim[];
   accessibilityBarriers: EvidenceLinkedClaim[];
