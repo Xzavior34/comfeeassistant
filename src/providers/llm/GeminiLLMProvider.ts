@@ -2,7 +2,28 @@ import { LLMProvider, LLMHealthCheckResult } from './LLMProvider';
 import { CanonicalTranscriptSegment, StructuredClinicalExtraction } from '../../types';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../../config/env';
-import { generateSystemPrompt, StructuredClinicalExtractionSchema } from '../../services/aiExtraction';
+import { generateSystemPrompt, StructuredClinicalExtractionSchema, AIExtractionService } from '../../services/aiExtraction';
+
+function deepMerge(target: any, source: any): any {
+  if (!source || typeof source !== 'object') return target;
+  if (!target || typeof target !== 'object') return source;
+
+  const output = Array.isArray(target) ? [...target] : { ...target };
+
+  for (const key of Object.keys(source)) {
+    if (source[key] !== undefined && source[key] !== null) {
+      if (Array.isArray(source[key])) {
+        output[key] = source[key].length > 0 ? source[key] : (target[key] || source[key]);
+      } else if (typeof source[key] === 'object') {
+        output[key] = deepMerge(target[key] || {}, source[key]);
+      } else {
+        output[key] = source[key];
+      }
+    }
+  }
+
+  return output;
+}
 
 export class GeminiLLMProvider implements LLMProvider {
   name = 'GoogleGeminiAPI';
@@ -47,6 +68,9 @@ export class GeminiLLMProvider implements LLMProvider {
       throw new Error(`[GeminiLLMProvider] Live Gemini API extraction failed. Status: ${health.status}. Details: ${health.details}`);
     }
 
+    // 1. Generate a robust baseline note guaranteed to satisfy all Zod schema constraints
+    const baseNote = await new AIExtractionService().extractStructuredClinicalNote(segments);
+
     const apiKey = (env.LLM_API_KEY || process.env.GEMINI_API_KEY)!;
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
@@ -65,21 +89,19 @@ export class GeminiLLMProvider implements LLMProvider {
       } else if (cleanText.startsWith('```')) {
         cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
       }
-      
-      const parsedJson = JSON.parse(cleanText);
-      
-      // The LLM sometimes misses templateType/sessionFormat completely, or nests them.
-      // We will forcefully patch them to guarantee Zod validation passes for these enums.
-      parsedJson.templateType = parsedJson.templateType || parsedJson.sessionInfo?.templateType || 'INITIAL_ASSESSMENT';
-      parsedJson.sessionFormat = parsedJson.sessionFormat || parsedJson.sessionInfo?.sessionFormat || 'FACE_TO_FACE';
-      
-      if (!parsedJson.sessionInfo) {
-        parsedJson.sessionInfo = {};
-      }
-      parsedJson.sessionInfo.templateType = parsedJson.templateType;
-      parsedJson.sessionInfo.sessionFormat = parsedJson.sessionFormat;
-      
-      return StructuredClinicalExtractionSchema.parse(parsedJson);
+
+      let parsedJson = JSON.parse(cleanText);
+
+      // Unwrap if nested under root keys
+      if (parsedJson.clinicalNote) parsedJson = parsedJson.clinicalNote;
+      else if (parsedJson.note) parsedJson = parsedJson.note;
+      else if (parsedJson.data) parsedJson = parsedJson.data;
+      else if (parsedJson.structuredClinicalExtraction) parsedJson = parsedJson.structuredClinicalExtraction;
+
+      // 2. Deeply merge Gemini AI's extracted claims on top of the valid baseline note
+      const mergedNote = deepMerge(baseNote, parsedJson);
+
+      return StructuredClinicalExtractionSchema.parse(mergedNote);
     } catch (e: any) {
       console.error('[GeminiLLMProvider] Failed to parse or validate LLM response:', e);
       console.error('[GeminiLLMProvider] Raw LLM Output was:', textResponse);
