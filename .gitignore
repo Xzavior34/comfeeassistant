@@ -7,6 +7,8 @@ yarn-error.log*
 # Build & Output
 dist/
 build/
+frontend/dist/
+frontend/node_modules/
 .expo/
 .next/
 out/

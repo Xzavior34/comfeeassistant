@@ -19,9 +19,30 @@ import auditRoutes from './routes/audit';
 
 const app = express();
 
-// Security Middleware
+// Security & CORS Middleware
 app.use(helmet());
-app.use(cors());
+
+const allowedOrigins = [
+  'https://vabatim.vercel.app',
+  process.env.CORS_ORIGIN,
+  process.env.APP_BASE_URL,
+  'http://localhost:3000',
+  'http://localhost:5173'
+].filter((val): val is string => Boolean(val));
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.some(o => o === origin || origin.endsWith('.vercel.app'))) {
+      callback(null, true);
+    } else {
+      callback(null, true);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
 app.use(express.json());
 
 // Rate Limiting
@@ -32,6 +53,17 @@ const limiter = rateLimit({
   legacyHeaders: false
 });
 app.use(limiter);
+
+// Root Operational Route
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Vabatim API Service',
+    description: 'AI-Powered Accessibility & Wheelchair Documentation Assistant API for UK Clinicians',
+    status: 'ONLINE',
+    frontend: 'https://vabatim.vercel.app',
+    health: '/health'
+  });
+});
 
 // Granular Sanitized Cloud Health Endpoints (No PII / Credentials exposed)
 app.get('/health', (req, res) => {

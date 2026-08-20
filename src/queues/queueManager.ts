@@ -7,11 +7,42 @@ import { auditLogger } from '../services/auditLogger';
 import { MeetingState } from '@prisma/client';
 import { validateStateTransition } from '../state/meetingStateMachine';
 
+import { Queue } from 'bullmq';
+import { getBullMQRedisOptions } from '../config/redis';
+
+export const QUEUE_NAME = 'vabatim-clinical-pipeline';
+
 export class QueueManager {
   private speech = getSpeechProvider();
   private ai = new AIExtractionService();
   private validator = new GroundingValidator();
   private docGen = new DocumentGeneratorService();
+  private queue: Queue | null = null;
+
+  constructor() {
+    try {
+      const connection = getBullMQRedisOptions();
+      this.queue = new Queue(QUEUE_NAME, { connection });
+    } catch (err) {
+      console.warn('[QueueManager]: Redis queue initialization notice - running in direct execution mode');
+    }
+  }
+
+  async enqueueMeetingJob(meetingId: string, audioUri: string, clinicianName: string, clientRef: string) {
+    if (this.queue) {
+      const job = await this.queue.add('process-meeting', {
+        meetingId,
+        audioUri,
+        clinicianName,
+        clientRef
+      });
+      console.log(`[QueueManager]: Enqueued meeting job ${job.id} for meeting ${meetingId}`);
+      return job;
+    } else {
+      console.log(`[QueueManager]: Redis queue offline, executing pipeline synchronously for meeting ${meetingId}`);
+      return this.processFullMeetingPipeline(meetingId, audioUri, clinicianName, clientRef);
+    }
+  }
 
   async processFullMeetingPipeline(meetingId: string, audioUri: string, clinicianName: string, clientRef: string) {
     console.log(`[QueueManager]: Starting async pipeline for meeting ${meetingId}...`);
@@ -77,3 +108,4 @@ export class QueueManager {
 }
 
 export const queueManager = new QueueManager();
+
