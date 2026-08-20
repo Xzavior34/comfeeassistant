@@ -7,7 +7,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "prisma generate && tsc",
+    "build": "prisma generate && npx prisma db push --accept-data-loss && npm run db:seed && tsc",
     "postinstall": "prisma generate && tsc",
     "start": "node dist/server.js",
     "worker": "node dist/queues/worker.js",
