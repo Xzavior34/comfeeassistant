@@ -15,16 +15,34 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    const user = await prisma.user.findUnique({
+    let user = await prisma.user.findUnique({
       where: { email }
     });
     
+    // Auto-registration feature: if user doesn't exist, create them automatically.
+    // Also, if credentials mismatch, we just return invalid credentials.
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials.' });
-    }
-
-    if (!bcrypt.compareSync(password, user.passwordHash)) {
-      return res.status(401).json({ error: 'Invalid credentials.' });
+      // Find or create default organisation
+      let defaultOrg = await prisma.organisation.findUnique({ where: { code: 'DEFAULT-ORG' } });
+      if (!defaultOrg) {
+        defaultOrg = await prisma.organisation.create({
+          data: { name: 'Default Organisation', code: 'DEFAULT-ORG' }
+        });
+      }
+      
+      const passwordHash = await bcrypt.hash(password, 10);
+      user = await prisma.user.create({
+        data: {
+          email,
+          passwordHash,
+          fullName: email.split('@')[0], // Derive name from email
+          organisationId: defaultOrg.id
+        }
+      });
+    } else {
+      if (!bcrypt.compareSync(password, user.passwordHash)) {
+        return res.status(401).json({ error: 'Invalid credentials.' });
+      }
     }
 
     const token = jwt.sign(

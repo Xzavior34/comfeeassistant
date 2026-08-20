@@ -60,8 +60,9 @@ function App() {
 
   const handleCreateMeeting = async () => {
     try {
-      const meeting = await createMeeting(clientRef || 'Anonymous-Client', templateType, sessionFormat);
-      setMeetingId(meeting.id || `meeting-${Date.now()}`);
+      const data = await createMeeting(clientRef || 'Anonymous-Client', templateType, sessionFormat);
+      const actualMeeting = data.meeting || data;
+      setMeetingId(actualMeeting.id || `meeting-${Date.now()}`);
       setScreen('CONSENT');
     } catch (err: any) {
       console.error('Meeting Error:', err);
