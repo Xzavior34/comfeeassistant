@@ -1,0 +1,207 @@
+[
+  {
+    "id": "eval-01",
+    "name": "Standard Physical Seating Assessment (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Good morning. Conducting seating assessment." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Severe lower back pain after 2 hours sitting." },
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "15 degree posterior pelvic tilt observed on MAT exam." }
+    ]
+  },
+  {
+    "id": "eval-02",
+    "name": "Entrance Barrier & Narrow Doorway Assessment (3 Speakers)",
+    "speakerCount": 3,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Let us check entrance accessibility." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Three steep steps at main entrance with no ramp." },
+      { "speakerId": "Speaker 3", "role": "CARER", "text": "Bathroom doorway width is only 650 mm." }
+    ]
+  },
+  {
+    "id": "eval-03",
+    "name": "Interrupted Speech & Overlapping Cues (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": true,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Are you experiencing pressure... [Overlapping speech / transcription uncertainty]" },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Yes, on my sacrum every afternoon." }
+    ]
+  },
+  {
+    "id": "eval-04",
+    "name": "Quiet Client & Soft Voice (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Can you describe your seating discomfort?" },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "It hurts around my left ischial tuberosity." }
+    ]
+  },
+  {
+    "id": "eval-05",
+    "name": "Complex MAT Exam with Pelvic Obliquity & Rotation (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "MAT exam reveals 10 degree right pelvic obliquity and 5 degree right pelvic rotation." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "I lean heavily to the right side when fatigued." }
+    ]
+  },
+  {
+    "id": "eval-06",
+    "name": "Interpreter Assisted Seating Consultation (4 Speakers)",
+    "speakerCount": 4,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Please ask the client about cushion discomfort." },
+      { "speakerId": "Speaker 4", "role": "INTERPRETER", "text": "Client states current gel cushion feels hard and cold." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Yes, gel cushion uncomfortable." }
+    ]
+  },
+  {
+    "id": "eval-07",
+    "name": "Wheelchair Transport & Vehicle Lockdown Barriers (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Do you travel in a WAV vehicle?" },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Yes, current wheelchair tie-down headrest interferes with vehicle ceiling height." }
+    ]
+  },
+  {
+    "id": "eval-08",
+    "name": "Contradictory Client Statements & Ambiguous Language (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "How many hours do you sit per day?" },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Maybe 4 hours... actually maybe 8 hours on weekends." }
+    ]
+  },
+  {
+    "id": "eval-09",
+    "name": "Missing Clinical Findings (All Categories Not Stated)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Hello. Today is initial general introduction." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Good morning therapist." }
+    ]
+  },
+  {
+    "id": "eval-10",
+    "name": "Pressure Redistributing Cushion Recommendation (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "I recommend trial of high specification pressure redistributing air-cell cushion." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "I agree to try that cushion." }
+    ]
+  },
+  {
+    "id": "eval-11",
+    "name": "Threshold Ramp & OT Referral Action Plan (3 Speakers)",
+    "speakerCount": 3,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Referral sent to Community OT for modular threshold ramp." },
+      { "speakerId": "Speaker 3", "role": "CARER", "text": "That will help us get into the garden." }
+    ]
+  },
+  {
+    "id": "eval-12",
+    "name": "Postural Support & Trunk Harness Evaluation (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Client requires dynamic chest harness for anterior trunk instability." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "My trunk collapses forward when typing." }
+    ]
+  },
+  {
+    "id": "eval-13",
+    "name": "Rapid Speaker Transitions & Interruptions (3 Speakers)",
+    "speakerCount": 3,
+    "hasOverlap": true,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "What about footrest height?" },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Footrests too short... [Overlapping speech / transcription uncertainty]" },
+      { "speakerId": "Speaker 3", "role": "CARER", "text": "His knees are pushed up." }
+    ]
+  },
+  {
+    "id": "eval-14",
+    "name": "Elevating Leg Rests & Knee Extension Limits (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Hamstring tightness restricts knee extension to 70 degrees bilaterally." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "My legs feel tight when elevated." }
+    ]
+  },
+  {
+    "id": "eval-15",
+    "name": "Powered Wheelchair Joystick Control Assessment (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Hand fatigue noted using standard proportional joystick." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "My fingers tire after 15 minutes of driving." }
+    ]
+  },
+  {
+    "id": "eval-16",
+    "name": "Environmental Gradient & Carpet Surface Drag (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "High pile carpet inside living room increases rolling resistance." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "It is exhausting to self-propel over the carpet." }
+    ]
+  },
+  {
+    "id": "eval-17",
+    "name": "Custom Molded Seating Clinic Follow-up (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Custom carved foam seat insert requested due to severe scoliosis." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "I need full back contact." }
+    ]
+  },
+  {
+    "id": "eval-18",
+    "name": "Headrest & Cervical Spine Positioning (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Sub-occipital head support cushion fitted for neck extension support." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "My head drops backwards without support." }
+    ]
+  },
+  {
+    "id": "eval-19",
+    "name": "Tilt-in-Space Functional Trial (2 Speakers)",
+    "speakerCount": 2,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "30 degree tilt-in-space mechanism recommended for periodic weight shifts." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Tilting back gives immediate relief." }
+    ]
+  },
+  {
+    "id": "eval-20",
+    "name": "Comprehensive Multi-Category Discharge Review (3 Speakers)",
+    "speakerCount": 3,
+    "hasOverlap": false,
+    "transcript": [
+      { "speakerId": "Speaker 1", "role": "THERAPIST", "text": "Summary: Contoured cushion trial approved, ramp referral sent to OT." },
+      { "speakerId": "Speaker 2", "role": "CLIENT", "text": "Thank you for addressing my sacral pressure pain and step barrier." },
+      { "speakerId": "Speaker 3", "role": "CARER", "text": "We look forward to the ramp installation." }
+    ]
+  }
+]

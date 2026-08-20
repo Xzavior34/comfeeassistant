@@ -1,0 +1,42 @@
+services:
+  # 1. Express API Backend Web Service (Render Free/Starter Tier)
+  - type: web
+    name: vabatim-api
+    env: node
+    region: frankfurt # EU Region closest to UK (or London where supported)
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: SPEECH_PROVIDER
+        value: google
+      - key: STORAGE_PROVIDER
+        value: supabase
+      - key: EMAIL_PROVIDER
+        value: mock
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vabatim-db
+          property: connectionString
+
+  # 2. BullMQ Background Processing Worker Service
+  - type: worker
+    name: vabatim-worker
+    env: node
+    region: frankfurt
+    buildCommand: npm install && npm run build
+    startCommand: node dist/queues/worker.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+databases:
+  # Supabase PostgreSQL is used as primary database; fallback Render Postgres definition
+  - name: vabatim-db
+    databaseName: vabatim
+    user: vabatim_user
+    region: frankfurt
+    plan: free

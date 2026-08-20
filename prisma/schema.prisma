@@ -1,0 +1,206 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  CLINICIAN
+  ADMIN
+  AUDITOR
+}
+
+enum ParticipantRole {
+  THERAPIST
+  CLIENT
+  CARER
+  INTERPRETER
+  OTHER
+}
+
+enum OverlapStatus {
+  CLEAR
+  SUSPECTED
+  UNKNOWN
+}
+
+enum MeetingState {
+  CREATED
+  CONSENT_PENDING
+  READY
+  RECORDING
+  UPLOADING
+  UPLOADED
+  TRANSCRIBING
+  DIARIZATION_COMPLETE
+  TRANSCRIPT_READY
+  EXTRACTION_RUNNING
+  EXTRACTION_COMPLETE
+  VALIDATION_FAILED
+  PENDING_REVIEW
+  UNDER_REVIEW
+  APPROVED
+  DOCUMENT_GENERATING
+  DOCUMENT_READY
+  DELIVERY_PENDING
+  DELIVERED
+  FAILED
+  DELETED
+}
+
+enum NoteStatus {
+  DRAFT
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+model Organisation {
+  id        String               @id @default(uuid())
+  name      String
+  code      String               @unique
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  users     User[]
+  meetings  Meeting[]
+  auditLogs AuditLog[]
+}
+
+model User {
+  id             String         @id @default(uuid())
+  email          String         @unique
+  passwordHash   String
+  fullName       String
+  role           UserRole       @default(CLINICIAN)
+  organisationId String
+  organisation   Organisation   @relation(fields: [organisationId], references: [id])
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  disabledAt     DateTime?
+  meetings       Meeting[]      @relation("ClinicianMeetings")
+  approvedNotes  ClinicalNote[] @relation("ApprovedNotes")
+}
+
+model Meeting {
+  id                   String              @id @default(uuid())
+  organisationId       String
+  organisation         Organisation        @relation(fields: [organisationId], references: [id])
+  clinicianId          String
+  clinician            User                @relation("ClinicianMeetings", fields: [clinicianId], references: [id])
+  clientReference      String              // Pseudonymous client code/ref
+  meetingType          String              @default("WHEELCHAIR_ASSESSMENT") // PHYSICAL | ONLINE
+  status               MeetingState        @default(CREATED)
+  expectedSpeakerCount Int                 @default(2)
+  retentionPolicy      String              @default("UK_NHS_STANDARD_8Y")
+  consentStatus        Boolean             @default(false)
+  createdAt            DateTime            @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  participants         Participant[]
+  consentRecords       ConsentRecord[]
+  recordings           Recording[]
+  transcriptSegments   TranscriptSegment[]
+  clinicalNotes        ClinicalNote[]
+}
+
+model Participant {
+  id               String          @id @default(uuid())
+  meetingId        String
+  meeting          Meeting         @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  speakerId        String          // e.g. "Speaker 1"
+  role             ParticipantRole @default(OTHER)
+  displayName      String?
+  enrollmentStatus String          @default("UNENROLLED")
+}
+
+model ConsentRecord {
+  id             String   @id @default(uuid())
+  meetingId      String
+  meeting        Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  consentVersion String
+  consentStatus  String   // GRANTED | DENIED | WITHDRAWN
+  policyVersion  String
+  participantRef String
+  actorId        String
+  metadata       Json?
+  timestamp      DateTime @default(now())
+}
+
+model Recording {
+  id               String   @id @default(uuid())
+  meetingId        String
+  meeting          Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  objectStorageKey String
+  originalFilename String
+  format           String
+  sampleRate       Int
+  channelCount     Int
+  durationMs       Int
+  bitrate          Int
+  processingStatus String   @default("PENDING")
+  deletionStatus   Boolean  @default(false)
+  createdAt        DateTime @default(now())
+}
+
+model TranscriptSegment {
+  id               String        @id @default(uuid())
+  meetingId        String
+  meeting          Meeting       @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  startTimeMs      Int
+  endTimeMs        Int
+  speakerId        String        // Provided by Speech Provider Diarization
+  mappedRole       ParticipantRole?
+  text             String
+  confidence       Float?
+  overlapStatus    OverlapStatus @default(CLEAR)
+  sourceProvider   String
+  sourceSegmentId  String?
+  evidenceItems    Evidence[]
+}
+
+model ClinicalNote {
+  id             String     @id @default(uuid())
+  meetingId      String
+  meeting        Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  structuredJson Json
+  status         NoteStatus @default(DRAFT)
+  aiModel        String
+  promptVersion  String
+  schemaVersion  String     @default("1.0")
+  generatedAt    DateTime   @default(now())
+  reviewedAt     DateTime?
+  approvedAt     DateTime?
+  approvedById   String?
+  approvedBy     User?      @relation("ApprovedNotes", fields: [approvedById], references: [id])
+  evidenceItems  Evidence[]
+}
+
+model Evidence {
+  id                  String            @id @default(uuid())
+  claimId             String
+  clinicalNoteId      String
+  clinicalNote        ClinicalNote      @relation(fields: [clinicalNoteId], references: [id], onDelete: Cascade)
+  transcriptSegmentId String
+  transcriptSegment   TranscriptSegment @relation(fields: [transcriptSegmentId], references: [id], onDelete: Cascade)
+  startTimeMs         Int
+  endTimeMs           Int
+  sourceText          String
+  confidence          String            @default("HIGH")
+}
+
+model AuditLog {
+  id             String       @id @default(uuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  actorId        String
+  eventType      String
+  resourceType   String
+  resourceId     String
+  details        Json?
+  clientIp       String?
+  timestamp      DateTime     @default(now())
+  recordHash     String?
+}
