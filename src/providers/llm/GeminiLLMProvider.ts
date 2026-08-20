@@ -7,7 +7,7 @@ import { generateSystemPrompt, StructuredClinicalExtractionSchema } from '../../
 export class GeminiLLMProvider implements LLMProvider {
   name = 'GoogleGeminiAPI';
 
-  async checkHealth(): Promise<LLMHealthCheckResult> {
+  async checkHealth(): Promise<LLMHealthCheckResult & { availableModels?: string[] }> {
     const apiKey = env.LLM_API_KEY || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
@@ -19,13 +19,18 @@ export class GeminiLLMProvider implements LLMProvider {
     }
 
     try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      const data = await response.json();
+      const availableModels = data.models ? data.models.map((m: any) => m.name) : [];
+
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: env.GEMINI_MODEL });
       // Authenticated health ping
       return {
         status: 'CONNECTED',
         providerName: this.name,
-        details: `Active model: ${env.GEMINI_MODEL}`
+        details: `Active model: ${env.GEMINI_MODEL}`,
+        availableModels
       };
     } catch (err: any) {
       return {
