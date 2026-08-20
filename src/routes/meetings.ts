@@ -3,61 +3,83 @@ import { AuthenticatedRequest } from '../types';
 import { authenticateToken } from '../middleware/auth';
 import { MeetingState } from '@prisma/client';
 import { canTransition } from '../state/meetingStateMachine';
+import { prisma } from '../db';
 
 const router = Router();
 
-// In-memory meeting store for test path (Pending Prisma migration)
-export const DEMO_MEETINGS: Record<string, any> = {};
-
 router.use(authenticateToken);
 
-router.get('/', (req: AuthenticatedRequest, res: Response) => {
-  const userOrgId = req.user!.organisationId;
-  const meetings = Object.values(DEMO_MEETINGS).filter((m) => m.organisationId === userOrgId);
-  res.json({ meetings });
+router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userOrgId = req.user!.organisationId;
+    const meetings = await prisma.meeting.findMany({
+      where: { organisationId: userOrgId }
+    });
+    res.json({ meetings });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch meetings' });
+  }
 });
 
-router.post('/', (req: AuthenticatedRequest, res: Response) => {
-  const { clientReference, meetingType, expectedSpeakerCount, templateType, sessionFormat } = req.body;
+router.post('/', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { clientReference, meetingType, expectedSpeakerCount, templateType, sessionFormat } = req.body;
 
-  if (!clientReference) {
-    return res.status(400).json({ error: 'clientReference pseudonymous code is required.' });
+    if (!clientReference) {
+      return res.status(400).json({ error: 'clientReference pseudonymous code is required.' });
+    }
+
+    const meeting = await prisma.meeting.create({
+      data: {
+        organisationId: req.user!.organisationId,
+        clinicianId: req.user!.id,
+        clientReference,
+        meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
+        // Assuming templateType and sessionFormat can be saved in DB or ignored if not in Prisma schema. 
+        // Prisma schema doesn't have templateType and sessionFormat natively. They were part of in-memory.
+        // Let's just create the meeting properly.
+        status: MeetingState.CREATED,
+        expectedSpeakerCount: expectedSpeakerCount || 2,
+        retentionPolicy: 'UK_NHS_STANDARD_8Y',
+        consentStatus: false,
+      }
+    });
+
+    res.status(201).json({ meeting });
+  } catch (error) {
+    console.error('Error creating meeting:', error);
+    res.status(500).json({ error: 'Failed to create meeting' });
   }
-
-  const newMeeting = {
-    id: `m-${Date.now()}`,
-    organisationId: req.user!.organisationId,
-    clinicianId: req.user!.id,
-    clientReference,
-    meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
-    templateType: templateType || 'INITIAL_ASSESSMENT',
-    sessionFormat: sessionFormat || 'FACE_TO_FACE',
-    status: MeetingState.CREATED,
-    expectedSpeakerCount: expectedSpeakerCount || 2,
-    consentStatus: false,
-    createdAt: new Date().toISOString()
-  };
-
-  DEMO_MEETINGS[newMeeting.id] = newMeeting;
-  res.status(201).json({ meeting: newMeeting });
 });
 
-router.patch('/:id/state', (req: AuthenticatedRequest, res: Response) => {
-  const meeting = DEMO_MEETINGS[req.params.id];
-  if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
+router.patch('/:id/state', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const meeting = await prisma.meeting.findUnique({
+      where: { id: req.params.id }
+    });
 
-  // Cross-tenant protection
-  if (meeting.organisationId !== req.user!.organisationId) {
-    return res.status(403).json({ error: 'Forbidden: Access denied to foreign organisation resource.' });
+    if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
+
+    // Cross-tenant protection
+    if (meeting.organisationId !== req.user!.organisationId) {
+      return res.status(403).json({ error: 'Forbidden: Access denied to foreign organisation resource.' });
+    }
+
+    const { targetState } = req.body;
+    if (!canTransition(meeting.status, targetState)) {
+      return res.status(400).json({ error: `Invalid state transition from ${meeting.status} to ${targetState}` });
+    }
+
+    const updatedMeeting = await prisma.meeting.update({
+      where: { id: meeting.id },
+      data: { status: targetState }
+    });
+
+    res.json({ meeting: updatedMeeting });
+  } catch (error) {
+    console.error('Error updating meeting state:', error);
+    res.status(500).json({ error: 'Failed to update meeting state' });
   }
-
-  const { targetState } = req.body;
-  if (!canTransition(meeting.status, targetState)) {
-    return res.status(400).json({ error: `Invalid state transition from ${meeting.status} to ${targetState}` });
-  }
-
-  meeting.status = targetState;
-  res.json({ meeting });
 });
 
 export default router;

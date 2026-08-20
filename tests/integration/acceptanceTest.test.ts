@@ -27,9 +27,9 @@ describe('Phase 5 Final System Acceptance Test Suite', () => {
 
     // Consent
     await request(app)
-      .post(`/api/consent/${meetingId}`)
+      .post(`/api/consent`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ consentStatus: 'GRANTED', consentVersion: 'v1.2-UK-GDPR', policyVersion: '2026-PRIVACY-POLICY-V2', participantRef: 'CLIENT-ACCEPTANCE-9901' });
+      .send({ meetingId, consentGranted: true, consentVersion: 'v1.2-UK-GDPR', policyVersion: '2026-PRIVACY-POLICY-V2', participantRef: 'CLIENT-ACCEPTANCE-9901' });
 
     // Upload & Process
     const uploadRes = await request(app)
@@ -40,8 +40,9 @@ describe('Phase 5 Final System Acceptance Test Suite', () => {
 
     // Review & Sign
     const approveRes = await request(app)
-      .post(`/api/reviews/${meetingId}/approve`)
-      .set('Authorization', `Bearer ${token}`);
+      .post(`/api/reviews/approve`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ meetingId, approvedBy: 'Clinician' });
     expect(approveRes.status).toBe(200);
     expect(approveRes.body.approvalRecord.noteHash).toBeDefined();
   });

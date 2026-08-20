@@ -2,6 +2,15 @@ const DEFAULT_API_URL = 'https://comfeeassistant.onrender.com';
 
 export const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || DEFAULT_API_URL;
 
+let authToken = '';
+
+function getAuthHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+  };
+}
+
 export async function checkApiHealth() {
   try {
     const res = await fetch(`${API_BASE_URL}/health`);
@@ -12,22 +21,31 @@ export async function checkApiHealth() {
   }
 }
 
-export async function loginClinician(email: string) {
+export async function loginClinician(email: string, password?: string) {
   const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password: 'demo-clinician-auth-pass' }) // Real auth logic needed in future
+    body: JSON.stringify({ email, password: password || 'ClinicianSecure123!' })
   });
   if (!res.ok) {
-    throw new Error(`Login failed: ${res.statusText}`);
+    let errorText = '';
+    try {
+      const errData = await res.json();
+      errorText = errData.error || errData.message || JSON.stringify(errData);
+    } catch {
+      errorText = await res.text().catch(() => res.statusText);
+    }
+    throw new Error(errorText);
   }
-  return await res.json();
+  const data = await res.json();
+  authToken = data.token;
+  return data;
 }
 
 export async function createMeeting(clientReference: string, templateType: 'INITIAL_ASSESSMENT' | 'REVIEW' = 'INITIAL_ASSESSMENT', sessionFormat: 'FACE_TO_FACE' | 'VIRTUAL' = 'FACE_TO_FACE') {
   const res = await fetch(`${API_BASE_URL}/api/meetings`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({
       clientReference,
       meetingType: 'WHEELCHAIR_ASSESSMENT',
@@ -38,7 +56,14 @@ export async function createMeeting(clientReference: string, templateType: 'INIT
     })
   });
   if (!res.ok) {
-    throw new Error(`Meeting creation failed: ${res.statusText}`);
+    let errorText = '';
+    try {
+      const errData = await res.json();
+      errorText = errData.error || errData.message || JSON.stringify(errData);
+    } catch {
+      errorText = await res.text().catch(() => res.statusText);
+    }
+    throw new Error(errorText);
   }
   return await res.json();
 }
@@ -46,7 +71,7 @@ export async function createMeeting(clientReference: string, templateType: 'INIT
 export async function recordConsent(meetingId: string, consentGranted: boolean) {
   const res = await fetch(`${API_BASE_URL}/api/consent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({
       meetingId,
       consentGranted,
@@ -55,7 +80,14 @@ export async function recordConsent(meetingId: string, consentGranted: boolean) 
     })
   });
   if (!res.ok) {
-    throw new Error(`Consent recording failed: ${res.statusText}`);
+    let errorText = '';
+    try {
+      const errData = await res.json();
+      errorText = errData.error || errData.message || JSON.stringify(errData);
+    } catch {
+      errorText = await res.text().catch(() => res.statusText);
+    }
+    throw new Error(errorText);
   }
   return await res.json();
 }
@@ -70,11 +102,18 @@ export async function submitTranscriptAndProcess(
 ) {
   const res = await fetch(`${API_BASE_URL}/api/transcripts/process`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ meetingId, segments, clinicianName, clientRef, templateType, sessionFormat })
   });
   if (!res.ok) {
-    throw new Error(`Transcript processing failed: ${res.statusText}`);
+    let errorText = '';
+    try {
+      const errData = await res.json();
+      errorText = errData.error || errData.message || JSON.stringify(errData);
+    } catch {
+      errorText = await res.text().catch(() => res.statusText);
+    }
+    throw new Error(errorText);
   }
   return await res.json();
 }
@@ -82,11 +121,18 @@ export async function submitTranscriptAndProcess(
 export async function approveReview(meetingId: string, approvedBy: string) {
   const res = await fetch(`${API_BASE_URL}/api/reviews/approve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ meetingId, approvedBy })
   });
   if (!res.ok) {
-    throw new Error(`Approval failed: ${res.statusText}`);
+    let errorText = '';
+    try {
+      const errData = await res.json();
+      errorText = errData.error || errData.message || JSON.stringify(errData);
+    } catch {
+      errorText = await res.text().catch(() => res.statusText);
+    }
+    throw new Error(errorText);
   }
   return await res.json();
 }

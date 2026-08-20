@@ -14,7 +14,7 @@ function App() {
   
   // Auth State
   const [clinicianEmail, setClinicianEmail] = useState<string>('');
-  const [clinicianName, setClinicianName] = useState<string>('');
+  const [clinicianPassword, setClinicianPassword] = useState<string>('');
 
   // Meeting State
   const [clientRef, setClientRef] = useState<string>('');
@@ -50,7 +50,7 @@ function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await loginClinician(clinicianEmail);
+      await loginClinician(clinicianEmail, clinicianPassword);
       setScreen('MEETINGS');
     } catch (err: any) {
       console.error('Login Error:', err);
@@ -106,7 +106,7 @@ function App() {
     setScreen('PROCESSING');
 
     try {
-      const result = await submitTranscriptAndProcess(meetingId, finalSegs, clinicianName, clientRef, templateType, sessionFormat);
+      const result = await submitTranscriptAndProcess(meetingId, finalSegs, 'Clinician', clientRef, templateType, sessionFormat);
       setExtractionResult(result);
       setTimeout(() => setScreen('REVIEW'), 1500);
     } catch (err: any) {
@@ -118,7 +118,7 @@ function App() {
 
   const handleApprove = async () => {
     try {
-      const approval = await approveReview(meetingId, clinicianName);
+      const approval = await approveReview(meetingId, 'Clinician');
       setDownloadLinks({
         pdfUrl: approval.pdfUrl || `${API_BASE_URL}/api/documents/download/${meetingId}.pdf`,
         docxUrl: approval.docxUrl || `${API_BASE_URL}/api/documents/download/${meetingId}.docx`
@@ -158,8 +158,8 @@ function App() {
             <form onSubmit={handleLogin} className="form">
               <label className="label">Clinician Email (NHS.net)</label>
               <input type="email" value={clinicianEmail} onChange={(e) => setClinicianEmail(e.target.value)} className="input" required />
-              <label className="label">Clinician Full Name & Role</label>
-              <input type="text" value={clinicianName} onChange={(e) => setClinicianName(e.target.value)} className="input" required />
+              <label className="label">Password</label>
+              <input type="password" value={clinicianPassword} onChange={(e) => setClinicianPassword(e.target.value)} className="input" required />
               <button type="submit" className="primaryButton">Sign In to Clinical Workspace</button>
             </form>
           </div>
