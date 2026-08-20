@@ -6,20 +6,8 @@ import { canTransition } from '../state/meetingStateMachine';
 
 const router = Router();
 
-// In-memory meeting store for test path
-export const DEMO_MEETINGS: Record<string, any> = {
-  'demo-meeting-101': {
-    id: 'demo-meeting-101',
-    organisationId: 'NHS-UK-TRUST-01',
-    clinicianId: 'user-clinician-1',
-    clientReference: 'CLIENT-REF-8842',
-    meetingType: 'PHYSICAL_SEATING_ASSESSMENT',
-    status: MeetingState.CREATED,
-    expectedSpeakerCount: 2,
-    consentStatus: false,
-    createdAt: new Date().toISOString()
-  }
-};
+// In-memory meeting store for test path (Pending Prisma migration)
+export const DEMO_MEETINGS: Record<string, any> = {};
 
 router.use(authenticateToken);
 

@@ -294,27 +294,13 @@ export class AIExtractionService {
         templateType,
         sessionFormat,
         participants: ['Clinician (OT)', 'Client'],
-        reasonForReferral: [
-          {
-            value: templateType === 'INITIAL_ASSESSMENT' ? 'Initial wheelchair & seating accessibility assessment' : 'Routine review of wheelchair seating & pressure management',
-            evidence: [],
-            confidence: 'HIGH',
-            sourceClassification: 'CLINICAL_INTERPRETATION'
-          }
-        ]
+        reasonForReferral: notStatedClaim()
       },
       subjectiveInfo: {
         clientCarerHistory: clientConcerns.length ? clientConcerns : notStatedClaim(),
         presentingConcerns: clientConcerns.length ? clientConcerns : notStatedClaim(),
-        clientGoals: [
-          {
-            value: 'Improve sitting posture and reduce pressure sore risk during daily activities.',
-            evidence: [],
-            confidence: 'MEDIUM',
-            sourceClassification: 'PATIENT_REPORTED'
-          }
-        ],
-        reportedChanges: templateType === 'REVIEW' ? clientConcerns : undefined
+        clientGoals: notStatedClaim(),
+        reportedChanges: templateType === 'REVIEW' ? (clientConcerns.length ? clientConcerns : notStatedClaim()) : undefined
       },
       functionalAssessment: {
         mobilityStatus: wheelchairSeatingConcerns.length ? wheelchairSeatingConcerns : notStatedClaim(),
@@ -356,23 +342,9 @@ export class AIExtractionService {
         accessoriesAndPads: notStatedClaim(),
         equipmentSuitabilityAndProblems: clientConcerns.length ? clientConcerns : notStatedClaim()
       },
-      clinicalReasoning: [
-        {
-          value: 'Assessment indicates seating adjustments required to accommodate postural alignment and mitigate pressure risk.',
-          evidence: [],
-          confidence: 'HIGH',
-          sourceClassification: 'CLINICAL_INTERPRETATION'
-        }
-      ],
+      clinicalReasoning: notStatedClaim(),
       recommendationsAndActions: actionsAndRecommendations.length ? actionsAndRecommendations : notStatedClaim(),
-      followUpPlan: [
-        {
-          value: 'Schedule follow-up review in 4 weeks following equipment trial.',
-          evidence: [],
-          confidence: 'HIGH',
-          sourceClassification: 'PLAN'
-        }
-      ],
+      followUpPlan: notStatedClaim(),
 
       clientConcerns: clientConcerns.length ? clientConcerns : notStatedClaim(),
       accessibilityBarriers: accessibilityBarriers.length ? accessibilityBarriers : notStatedClaim(),

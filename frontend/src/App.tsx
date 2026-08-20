@@ -9,9 +9,9 @@ type SessionFormat = 'FACE_TO_FACE' | 'VIRTUAL';
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('LOGIN');
-  const [clinicianEmail, setClinicianEmail] = useState('dr.smith@nhs.net');
-  const [clinicianName, setClinicianName] = useState('Dr. Jane Smith (Lead OT)');
-  const [clientRef, setClientRef] = useState('NHS-PATIENT-8821');
+  const [clinicianEmail, setClinicianEmail] = useState('');
+  const [clinicianName, setClinicianName] = useState('');
+  const [clientRef, setClientRef] = useState('');
   const [templateType, setTemplateType] = useState<TemplateType>('INITIAL_ASSESSMENT');
   const [sessionFormat, setSessionFormat] = useState<SessionFormat>('FACE_TO_FACE');
   const [meetingId, setMeetingId] = useState<string>('');
@@ -66,24 +66,6 @@ export function App() {
     setIsListening(true);
     setTimerSeconds(0);
     setSegments([]);
-
-    const initialSegments: SpeechSegment[] = [
-      {
-        speakerId: 'Speaker 1 (Therapist)',
-        text: 'Good morning. We are reviewing your posture, seating position, and 18 inches seat width for the new wheelchair prescription.',
-        startTimeMs: 0,
-        endTimeMs: 4000,
-        confidence: 0.98
-      },
-      {
-        speakerId: 'Speaker 2 (Client)',
-        text: 'I experience severe sacral pressure sores after sitting for more than 2 hours in my current seat. Also, my home front door has 2 entrance steps and a 680mm bathroom frame.',
-        startTimeMs: 4500,
-        endTimeMs: 12000,
-        confidence: 0.96
-      }
-    ];
-    setSegments(initialSegments);
 
     deviceSpeech.start(
       (interim: string) => setInterimText(interim),
