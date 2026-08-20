@@ -59,7 +59,7 @@ router.post('/login', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Login error:', error);
-    return res.status(500).json({ error: 'Internal server error during authentication.', details: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({ error: 'Internal server error during authentication.' });
   }
 });
 
