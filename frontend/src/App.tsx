@@ -120,9 +120,10 @@ function App() {
   const handleApprove = async () => {
     try {
       const approval = await approveReview(meetingId, 'Clinician');
+      const getFullUrl = (url: string) => (url.startsWith('http') ? url : `${API_BASE_URL}${url}`);
       setDownloadLinks({
-        pdfUrl: approval.pdfUrl || `${API_BASE_URL}/api/documents/download/${meetingId}.pdf`,
-        docxUrl: approval.docxUrl || `${API_BASE_URL}/api/documents/download/${meetingId}.docx`
+        pdfUrl: getFullUrl(approval.pdfUrl || `/api/documents/download/${meetingId}.pdf`),
+        docxUrl: getFullUrl(approval.docxUrl || `/api/documents/download/${meetingId}.docx`)
       });
       setScreen('COMPLETED');
     } catch (err: any) {
