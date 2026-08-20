@@ -1,7 +1,18 @@
 {
   "version": 2,
-  "name": "vabatim-clinician-portal",
-  "framework": "nextjs",
+  "name": "vabatim-api",
+  "builds": [
+    {
+      "src": "api/index.ts",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/index.ts"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -11,12 +22,6 @@
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" }
       ]
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://vabatim-api.onrender.com/api/:path*"
     }
   ]
 }
