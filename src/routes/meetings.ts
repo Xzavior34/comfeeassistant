@@ -30,7 +30,7 @@ router.get('/', (req: AuthenticatedRequest, res: Response) => {
 });
 
 router.post('/', (req: AuthenticatedRequest, res: Response) => {
-  const { clientReference, meetingType, expectedSpeakerCount } = req.body;
+  const { clientReference, meetingType, expectedSpeakerCount, templateType, sessionFormat } = req.body;
 
   if (!clientReference) {
     return res.status(400).json({ error: 'clientReference pseudonymous code is required.' });
@@ -41,7 +41,9 @@ router.post('/', (req: AuthenticatedRequest, res: Response) => {
     organisationId: req.user!.organisationId,
     clinicianId: req.user!.id,
     clientReference,
-    meetingType: meetingType || 'PHYSICAL_SEATING_ASSESSMENT',
+    meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
+    templateType: templateType || 'INITIAL_ASSESSMENT',
+    sessionFormat: sessionFormat || 'FACE_TO_FACE',
     status: MeetingState.CREATED,
     expectedSpeakerCount: expectedSpeakerCount || 2,
     consentStatus: false,

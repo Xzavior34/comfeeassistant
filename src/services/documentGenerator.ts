@@ -24,8 +24,8 @@ export class DocumentGeneratorService {
       doc.on('error', (err: any) => reject(err));
 
       const titleText = noteData.templateType === 'REVIEW'
-        ? 'WHEELCHAIR & SEATING CLINICAL NOTE - REVIEW APPOINTMENT'
-        : 'WHEELCHAIR & SEATING CLINICAL NOTE - INITIAL ASSESSMENT';
+        ? 'PROFESSIONAL CLINICAL NOTE - REVIEW APPOINTMENT'
+        : 'PROFESSIONAL CLINICAL NOTE - INITIAL ASSESSMENT';
 
       // PDF Header
       doc.fontSize(16).text(titleText, { align: 'center' });

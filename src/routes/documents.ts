@@ -86,7 +86,7 @@ router.get('/secure-access', async (req: Request, res: Response) => {
       unstatedOrMissingFields: []
     };
 
-    const pdfBuffer = await docGen.generatePDF(sampleMeta, sampleNote);
+    const pdfBuffer = await docGen.generatePDF(sampleMeta, sampleNote as any);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="Vabatim_Clinical_Report_${docKey}.pdf"`);

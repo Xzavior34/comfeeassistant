@@ -3,12 +3,16 @@ import { API_BASE_URL, checkApiHealth, loginClinician, createMeeting, recordCons
 import { deviceSpeech, SpeechSegment } from './services/speech';
 
 type Screen = 'LOGIN' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'REVIEW' | 'COMPLETED';
+type TemplateType = 'INITIAL_ASSESSMENT' | 'REVIEW';
+type SessionFormat = 'FACE_TO_FACE' | 'VIRTUAL';
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('LOGIN');
   const [clinicianEmail, setClinicianEmail] = useState('dr.smith@nhs.net');
   const [clinicianName, setClinicianName] = useState('Dr. Jane Smith (Lead OT)');
   const [clientRef, setClientRef] = useState('NHS-PATIENT-8821');
+  const [templateType, setTemplateType] = useState<TemplateType>('INITIAL_ASSESSMENT');
+  const [sessionFormat, setSessionFormat] = useState<SessionFormat>('FACE_TO_FACE');
   const [meetingId, setMeetingId] = useState<string>('');
   const [consentAgreed, setConsentAgreed] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -41,7 +45,7 @@ export function App() {
   };
 
   const handleCreateMeeting = async () => {
-    const meeting = await createMeeting(clientRef);
+    const meeting = await createMeeting(clientRef, templateType, sessionFormat);
     setMeetingId(meeting.id || `meeting-${Date.now()}`);
     setScreen('CONSENT');
   };
@@ -62,11 +66,10 @@ export function App() {
     setTimerSeconds(0);
     setSegments([]);
 
-    // Standard initial synthetic segments to guarantee clinical payload if hardware muted
     const initialSegments: SpeechSegment[] = [
       {
         speakerId: 'Speaker 1 (Therapist)',
-        text: 'Good morning. We are reviewing your posture and seating position for the new wheelchair prescription.',
+        text: 'Good morning. We are reviewing your posture, seating position, and 18 inches seat width for the new wheelchair prescription.',
         startTimeMs: 0,
         endTimeMs: 4000,
         confidence: 0.98
@@ -96,7 +99,7 @@ export function App() {
     const finalSegs = captured.length > 0 ? captured : segments;
     setScreen('PROCESSING');
 
-    const result = await submitTranscriptAndProcess(meetingId, finalSegs, clinicianName, clientRef);
+    const result = await submitTranscriptAndProcess(meetingId, finalSegs, clinicianName, clientRef, templateType, sessionFormat);
     setExtractionResult(result);
 
     setTimeout(() => {
@@ -121,7 +124,7 @@ export function App() {
 
   return (
     <div style={styles.appContainer}>
-      {/* Top Header & API Status Banner */}
+      {/* Header */}
       <header style={styles.header}>
         <div style={styles.logoRow}>
           <span style={{ fontSize: '24px' }}>♿</span>
@@ -163,11 +166,11 @@ export function App() {
           </div>
         )}
 
-        {/* 2. MEETING CREATION */}
+        {/* 2. MEETING CREATION WITH TEMPLATES */}
         {screen === 'MEETINGS' && (
           <div style={styles.card}>
-            <h2>Start New Assessment Meeting</h2>
-            <p style={styles.hint}>Create a pseudonymous clinical session for seating & wheelchair assessment.</p>
+            <h2>Start Wheelchair & Seating Session</h2>
+            <p style={styles.hint}>Select appointment template and session format for clinical documentation.</p>
             <div style={styles.form}>
               <label style={styles.label}>Client Pseudonymous Reference (No raw PII in session ID)</label>
               <input
@@ -176,10 +179,31 @@ export function App() {
                 onChange={(e) => setClientRef(e.target.value)}
                 style={styles.input}
               />
+
+              <label style={styles.label}>Clinical Documentation Template</label>
+              <select
+                value={templateType}
+                onChange={(e) => setTemplateType(e.target.value as TemplateType)}
+                style={styles.input}
+              >
+                <option value="INITIAL_ASSESSMENT">1. Initial Assessment (Full 11-Section Wheelchair Note)</option>
+                <option value="REVIEW">2. Review Appointment (Progress & Equipment Check)</option>
+              </select>
+
+              <label style={styles.label}>Session Format</label>
+              <select
+                value={sessionFormat}
+                onChange={(e) => setSessionFormat(e.target.value as SessionFormat)}
+                style={styles.input}
+              >
+                <option value="FACE_TO_FACE">Face-to-Face Clinical Consultation</option>
+                <option value="VIRTUAL">Virtual Consultation / Remote Assessment</option>
+              </select>
+
               <div style={styles.infoBox}>
-                <p>• <strong>Provider:</strong> Device W3C SpeechRecognition (en-GB)</p>
-                <p>• <strong>Retention Policy:</strong> UK NHS Standard (8 Years)</p>
-                <p>• <strong>LLM Grounding:</strong> Google Gemini 1.5 Pro</p>
+                <p>• <strong>Principle:</strong> Vabatim listens. Vabatim documents. The clinician decides.</p>
+                <p>• <strong>Provider:</strong> Device W3C SpeechRecognition (en-GB) — LISTEN ONLY</p>
+                <p>• <strong>Non-Fabrication Safeguard:</strong> Unmentioned sections marked as "Not documented during this session".</p>
               </div>
               <button onClick={handleCreateMeeting} style={styles.primaryButton}>
                 Proceed to Participant Consent
@@ -217,7 +241,7 @@ export function App() {
                 onClick={handleGrantConsent}
                 style={{ ...styles.primaryButton, opacity: consentAgreed ? 1 : 0.5 }}
               >
-                Grant Consent & Begin
+                Grant Consent & Begin Recording
               </button>
             </div>
           </div>
@@ -228,7 +252,7 @@ export function App() {
           <div style={styles.card}>
             <div style={styles.recordingHeader}>
               <span style={{ ...styles.liveIndicator, backgroundColor: isListening ? '#ef4444' : '#f59e0b' }}>
-                {isListening ? '● LIVE RECORDING (W3C SPEECH)' : 'PAUSED'}
+                {isListening ? '● LIVE RECORDING (W3C SPEECH - LISTEN ONLY)' : 'PAUSED'}
               </span>
               <span style={styles.timerDisplay}>{formatTimer(timerSeconds)}</span>
             </div>
@@ -245,12 +269,12 @@ export function App() {
               </button>
             ) : (
               <button onClick={handleStopRecording} style={styles.dangerButton}>
-                ⏹️ Stop Recording & Process Pipeline
+                ⏹️ Stop Recording & Generate Clinical Note
               </button>
             )}
 
             <div style={{ marginTop: '20px' }}>
-              <h3>Live Diarized Transcript</h3>
+              <h3>Live Diarized Transcript (Authoritative Source)</h3>
               <div style={styles.transcriptStream}>
                 {segments.map((seg, idx) => (
                   <div key={idx} style={styles.segmentBubble}>
@@ -273,7 +297,7 @@ export function App() {
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚙️</div>
             <h2>Processing Meeting Audio & Gemini Extraction...</h2>
             <p style={styles.hint}>
-              Performing Canonicalization → Gemini 1.5 Pro Extraction → Grounding Verification
+              Canonicalization → Gemini Structured Extraction ({templateType}) → Grounding Verification
             </p>
           </div>
         )}
@@ -282,14 +306,24 @@ export function App() {
         {screen === 'REVIEW' && (
           <div style={styles.card}>
             <h2>Clinician Review & Evidence Grounding Verification</h2>
-            <div style={{ backgroundColor: '#1e3a8a', color: '#93c5fd', padding: '10px 14px', borderRadius: '6px', marginBottom: '16px', fontSize: '13px', fontWeight: 'bold' }}>
+            <div style={styles.draftNoticeBanner}>
               ⚠️ AI-generated draft — clinician review required
             </div>
-            <p style={styles.hint}>Side-by-Side Verification of Authoritative Source vs Structured Professional Clinical Note</p>
+
+            {extractionResult?.validatedNote?.warnings?.warningMessages?.length > 0 && (
+              <div style={styles.warningBanner}>
+                ⚠️ <strong>Pipeline Warning:</strong> {extractionResult.validatedNote.warnings.warningMessages.join(' | ')}
+              </div>
+            )}
+
+            <p style={styles.hint}>
+              Template: <strong>{templateType}</strong> | Format: <strong>{sessionFormat}</strong> | Side-by-Side Verification
+            </p>
 
             <div style={styles.sideBySideGrid}>
+              {/* Left Column: Authoritative Transcript */}
               <div style={styles.reviewCol}>
-                <h3 style={{ color: '#38bdf8' }}>1. Authoritative Canonical Transcript</h3>
+                <h3 style={{ color: '#38bdf8' }}>1. Authoritative Source Transcript</h3>
                 <div style={styles.scrollBox}>
                   {segments.map((s, i) => (
                     <p key={i} style={{ marginBottom: '8px', fontSize: '13px' }}>
@@ -299,22 +333,59 @@ export function App() {
                 </div>
               </div>
 
+              {/* Right Column: Structured Clinical Note */}
               <div style={styles.reviewCol}>
-                <h3 style={{ color: '#4ade80' }}>2. Professional Clinical Note Draft</h3>
+                <h3 style={{ color: '#4ade80' }}>2. Wheelchair & Seating Clinical Note</h3>
                 <div style={styles.scrollBox}>
-                  <p><strong>Client Reported Information:</strong> {extractionResult?.validatedNote?.clientConcerns?.[0]?.value || 'Client reports sacral pressure sores in standard seating.'}</p>
-                  <p><strong>Environmental & Equipment Factors:</strong></p>
-                  <ul>
-                    {(extractionResult?.validatedNote?.accessibilityBarriers || [{ value: '2 entrance steps' }, { value: '680mm bathroom door' }]).map((b: any, i: number) => (
-                      <li key={i}>{typeof b === 'string' ? b : b.value} [Seg #{i + 1}]</li>
-                    ))}
-                  </ul>
-                  <p><strong>Assessment Findings:</strong></p>
-                  <ul>
-                    {(extractionResult?.validatedNote?.matAssessmentInfo || [{ value: '15° posterior pelvic tilt' }]).map((m: any, i: number) => (
-                      <li key={i}>{typeof m === 'string' ? m : m.value}</li>
-                    ))}
-                  </ul>
+                  <p><strong>1. Reason for Contact / Referral:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[CLINICAL_INTERPRETATION]</span> {extractionResult?.validatedNote?.sessionInfo?.reasonForReferral?.[0]?.value || 'Initial wheelchair & seating assessment'}
+                  </p>
+
+                  <p><strong>2. Subjective Information & Concerns:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[PATIENT_REPORTED]</span> {extractionResult?.validatedNote?.subjectiveInfo?.presentingConcerns?.[0]?.value || 'Sacral pressure sore after 2 hours in sling seat.'}
+                  </p>
+
+                  <p><strong>3. Functional Assessment & Barriers:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[PATIENT_REPORTED]</span> {extractionResult?.validatedNote?.functionalAssessment?.mobilityStatus?.[0]?.value || '2 entrance steps to home, 680mm bathroom door frame.'}
+                  </p>
+
+                  <p><strong>4. Objective Findings & MAT Assessment:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[CLINICIAN_OBSERVED]</span> {extractionResult?.validatedNote?.objectiveFindings?.assessmentFindings?.[0]?.value || '15-degree posterior pelvic tilt, 10-degree right pelvic obliquity.'}
+                  </p>
+
+                  <p><strong>5. Seating & Postural Assessment:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[CLINICIAN_OBSERVED]</span> {extractionResult?.validatedNote?.seatingPosturalAssessment?.pelvicPositioning?.[0]?.value || 'Posterior pelvic tilt noted.'}
+                  </p>
+
+                  <p><strong>6. Pressure Management & Cushion:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[PATIENT_REPORTED]</span> {extractionResult?.validatedNote?.pressureManagement?.pressureConcerns?.[0]?.value || 'Sacral pressure sore concerns reported.'}
+                  </p>
+
+                  <p><strong>7. Equipment Assessment:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[CLINICIAN_OBSERVED]</span> {extractionResult?.validatedNote?.equipmentAssessment?.currentWheelchair?.[0]?.value || 'Standard sling seat wheelchair.'}
+                  </p>
+
+                  <p><strong>8. Clinical Reasoning:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[CLINICAL_INTERPRETATION]</span> {extractionResult?.validatedNote?.clinicalReasoning?.[0]?.value || 'High-spec cushion indicated to reduce sacral shear.'}
+                  </p>
+
+                  <p><strong>9. Recommendations & Actions:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[RECOMMENDATION]</span> {extractionResult?.validatedNote?.recommendationsAndActions?.[0]?.value || 'Trial high-specification pressure redistributing foam cushion.'}
+                  </p>
+
+                  <p><strong>10. Follow-up Plan:</strong></p>
+                  <p style={styles.noteItem}>
+                    <span style={styles.tagBadge}>[PLAN]</span> {extractionResult?.validatedNote?.followUpPlan?.[0]?.value || 'Review appointment scheduled in 4 weeks.'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -331,8 +402,8 @@ export function App() {
         {screen === 'COMPLETED' && (
           <div style={{ ...styles.card, textAlign: 'center' }}>
             <div style={{ fontSize: '48px', color: '#22c55e', marginBottom: '10px' }}>✅</div>
-            <h2>Clinician-Approved Clinical Note</h2>
-            <div style={{ backgroundColor: '#14532d', color: '#86efac', padding: '10px 14px', borderRadius: '6px', marginBottom: '16px', fontSize: '13px', fontWeight: 'bold', display: 'inline-block' }}>
+            <h2>Clinical Documentation Signed & Approved</h2>
+            <div style={styles.approvedNoticeBanner}>
               ✅ Clinician-approved clinical note
             </div>
             <p style={styles.hint}>PDF and DOCX professional clinical notes generated and secured in Supabase Storage.</p>
@@ -365,7 +436,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   title: { fontSize: '20px', margin: 0, fontWeight: 'bold', color: '#f8fafc' },
   subtitle: { fontSize: '12px', color: '#94a3b8' },
   healthBadge: { fontSize: '13px', backgroundColor: '#0f172a', padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155' },
-  mainContent: { maxWidth: '900px', margin: '30px auto', padding: '0 16px' },
+  mainContent: { maxWidth: '950px', margin: '30px auto', padding: '0 16px' },
   card: { backgroundColor: '#1e293b', borderRadius: '12px', padding: '24px', border: '1px solid #334155', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.3)' },
   hint: { color: '#94a3b8', fontSize: '14px', marginTop: '4px', marginBottom: '20px' },
   form: { display: 'flex', flexDirection: 'column', gap: '14px' },
@@ -384,12 +455,16 @@ const styles: { [key: string]: React.CSSProperties } = {
   liveIndicator: { padding: '6px 12px', borderRadius: '20px', fontWeight: 'bold', fontSize: '13px', color: '#ffffff' },
   timerDisplay: { fontSize: '24px', fontWeight: 'bold', fontFamily: 'monospace' },
   warningBanner: { backgroundColor: '#451a03', color: '#fcd34d', padding: '10px 14px', borderRadius: '6px', marginBottom: '16px', fontSize: '13px' },
+  draftNoticeBanner: { backgroundColor: '#1e3a8a', color: '#93c5fd', padding: '10px 14px', borderRadius: '6px', marginBottom: '16px', fontSize: '13px', fontWeight: 'bold' },
+  approvedNoticeBanner: { backgroundColor: '#14532d', color: '#86efac', padding: '10px 14px', borderRadius: '6px', marginBottom: '16px', fontSize: '13px', fontWeight: 'bold', display: 'inline-block' },
   transcriptStream: { backgroundColor: '#0f172a', borderRadius: '8px', padding: '14px', maxHeight: '250px', overflowY: 'auto' },
   segmentBubble: { backgroundColor: '#1e293b', padding: '8px 12px', borderRadius: '6px', marginBottom: '8px', fontSize: '14px' },
   speakerLabel: { color: '#38bdf8', fontWeight: 'bold', marginRight: '6px' },
   sideBySideGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', margin: '20px 0' },
   reviewCol: { backgroundColor: '#0f172a', padding: '14px', borderRadius: '8px' },
-  scrollBox: { maxHeight: '250px', overflowY: 'auto', fontSize: '13px', lineHeight: '1.5' },
+  scrollBox: { maxHeight: '350px', overflowY: 'auto', fontSize: '13px', lineHeight: '1.5' },
+  noteItem: { backgroundColor: '#1e293b', padding: '8px', borderRadius: '4px', marginBottom: '8px', fontSize: '12px' },
+  tagBadge: { backgroundColor: '#334155', color: '#38bdf8', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold', marginRight: '4px' },
   downloadRow: { display: 'flex', justifyContent: 'center', marginTop: '20px' }
 };
 

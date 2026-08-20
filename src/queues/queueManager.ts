@@ -5,7 +5,7 @@ import { GroundingValidator } from '../services/groundingValidator';
 import { DocumentGeneratorService } from '../services/documentGenerator';
 import { auditLogger } from '../services/auditLogger';
 import { MeetingState } from '@prisma/client';
-import { validateStateTransition } from '../state/meetingStateMachine';
+import { TemplateType, SessionFormat } from '../types';
 
 import { Queue } from 'bullmq';
 import { getBullMQRedisOptions } from '../config/redis';
@@ -28,24 +28,40 @@ export class QueueManager {
     }
   }
 
-  async enqueueMeetingJob(meetingId: string, audioUri: string, clinicianName: string, clientRef: string) {
+  async enqueueMeetingJob(
+    meetingId: string,
+    audioUri: string,
+    clinicianName: string,
+    clientRef: string,
+    templateType: TemplateType = 'INITIAL_ASSESSMENT',
+    sessionFormat: SessionFormat = 'FACE_TO_FACE'
+  ) {
     if (this.queue) {
       const job = await this.queue.add('process-meeting', {
         meetingId,
         audioUri,
         clinicianName,
-        clientRef
+        clientRef,
+        templateType,
+        sessionFormat
       });
       console.log(`[QueueManager]: Enqueued meeting job ${job.id} for meeting ${meetingId}`);
       return job;
     } else {
       console.log(`[QueueManager]: Redis queue offline, executing pipeline synchronously for meeting ${meetingId}`);
-      return this.processFullMeetingPipeline(meetingId, audioUri, clinicianName, clientRef);
+      return this.processFullMeetingPipeline(meetingId, audioUri, clinicianName, clientRef, templateType, sessionFormat);
     }
   }
 
-  async processFullMeetingPipeline(meetingId: string, audioUri: string, clinicianName: string, clientRef: string) {
-    console.log(`[QueueManager]: Starting async pipeline for meeting ${meetingId}...`);
+  async processFullMeetingPipeline(
+    meetingId: string,
+    audioUri: string,
+    clinicianName: string,
+    clientRef: string,
+    templateType: TemplateType = 'INITIAL_ASSESSMENT',
+    sessionFormat: SessionFormat = 'FACE_TO_FACE'
+  ) {
+    console.log(`[QueueManager]: Starting async pipeline for meeting ${meetingId} (Template: ${templateType})...`);
 
     // 1. Audio Processing & Speech Recognition
     auditLogger.log({
@@ -62,7 +78,13 @@ export class QueueManager {
     const canonicalSegments = normalizeToCanonicalTranscript(meetingId, rawTranscript);
 
     // 3. AI Extraction
-    const extractedNote = await this.ai.extractStructuredClinicalNote(canonicalSegments);
+    const extractedNote = await this.ai.extractStructuredClinicalNote(
+      canonicalSegments,
+      templateType,
+      sessionFormat,
+      clientRef,
+      clinicianName
+    );
 
     // 4. Grounding Validation
     const validationResult = this.validator.validate(extractedNote, canonicalSegments);
@@ -108,4 +130,3 @@ export class QueueManager {
 }
 
 export const queueManager = new QueueManager();
-

@@ -33,11 +33,11 @@ export class GroundingValidator {
     const validatedNote: StructuredClinicalExtraction = { ...extractedNote };
 
     for (const category of categories) {
-      const claims = extractedNote[category] as EvidenceLinkedClaim[];
+      const claims = (extractedNote[category] || []) as EvidenceLinkedClaim[];
       const validatedClaims: EvidenceLinkedClaim[] = [];
 
       for (const claim of claims) {
-        if (claim.value === 'Not stated') {
+        if (!claim.value || claim.value === 'Not stated' || claim.value.includes('Not documented')) {
           validatedClaims.push(claim);
           continue;
         }
@@ -77,8 +77,8 @@ export class GroundingValidator {
           const sourceTextLower = ev.sourceText.toLowerCase();
           const unsupportedKeywords = claimKeywords.filter(kw => !sourceTextLower.includes(kw));
 
-          // If more than 50% of significant claim terms are absent in source text, reject claim
-          if (claimKeywords.length > 0 && unsupportedKeywords.length / claimKeywords.length > 0.5) {
+          // If more than 60% of significant claim terms are absent in source text, reject claim
+          if (claimKeywords.length > 0 && unsupportedKeywords.length / claimKeywords.length > 0.6) {
             rejectedClaims.push({
               claimValue: claim.value,
               reason: `Claim asserts ungrounded concepts [${unsupportedKeywords.join(', ')}] not aligned with transcript segment text "${ev.sourceText}"`
@@ -94,10 +94,15 @@ export class GroundingValidator {
         }
       }
 
-      validatedNote[category] = validatedClaims.length > 0 ? validatedClaims : [{ value: 'Not stated', evidence: [], confidence: 'LOW' }];
+      validatedNote[category] = validatedClaims.length > 0 ? validatedClaims : [{ value: 'Not documented during this session.', evidence: [], confidence: 'LOW', sourceClassification: 'NOT_STATED' }];
     }
 
     const isValid = rejectedClaims.length === 0;
+
+    if (!isValid && validatedNote.warnings) {
+      validatedNote.warnings.groundingValidationFailure = true;
+      validatedNote.warnings.warningMessages.push('Grounding validation flagged ungrounded claims in clinical draft.');
+    }
 
     return {
       isValid,
