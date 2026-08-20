@@ -53,7 +53,20 @@ export class GeminiLLMProvider implements LLMProvider {
     const result = await model.generateContent(prompt);
     const textResponse = result.response.text();
 
-    const parsedJson = JSON.parse(textResponse);
-    return StructuredClinicalExtractionSchema.parse(parsedJson);
+    try {
+      let cleanText = textResponse.trim();
+      if (cleanText.startsWith('```json')) {
+        cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+      } else if (cleanText.startsWith('```')) {
+        cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+      }
+      
+      const parsedJson = JSON.parse(cleanText);
+      return StructuredClinicalExtractionSchema.parse(parsedJson);
+    } catch (e: any) {
+      console.error('[GeminiLLMProvider] Failed to parse or validate LLM response:', e);
+      console.error('[GeminiLLMProvider] Raw LLM Output was:', textResponse);
+      throw new Error(`LLM Extraction failed: ${e.message}`);
+    }
   }
 }

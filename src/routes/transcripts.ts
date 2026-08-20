@@ -23,11 +23,23 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
       return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
     }
 
+    // Ensure all segments have an ID so the LLM can reference them in evidence
+    const canonicalSegments = segments.map((s: any, idx: number) => ({
+      id: s.id || `seg-${Date.now()}-${idx}`,
+      meetingId,
+      speakerId: s.speakerId,
+      mappedRole: s.mappedRole || (s.speakerId.includes('1') ? 'THERAPIST' : 'CLIENT'),
+      text: s.text,
+      startTimeMs: s.startTimeMs,
+      endTimeMs: s.endTimeMs,
+      confidence: s.confidence
+    }));
+
     // Process using LLM
     const llm = getLLMProvider();
     
     // We expect the LLM to return a validated clinical note object
-    const validatedNote = await llm.extractStructuredNote(segments as any);
+    const validatedNote = await llm.extractStructuredNote(canonicalSegments);
 
     await prisma.meeting.update({
       where: { id: meetingId },
@@ -57,9 +69,9 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
       message: 'Processing complete',
       note: validatedNote
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Transcript processing error:', error);
-    res.status(500).json({ error: 'Failed to process transcript' });
+    res.status(500).json({ error: error.message || 'Failed to process transcript' });
   }
 });
 
