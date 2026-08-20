@@ -1,8 +1,10 @@
 {
   "version": 2,
   "name": "vabatim-frontend",
+  "framework": "vite",
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
+  "cleanUrls": true,
   "rewrites": [
     {
       "source": "/api/:path*",
@@ -17,7 +19,7 @@
       "destination": "https://comfeeassistant.onrender.com/health"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!assets|api|health|favicon.ico).*)",
       "destination": "/index.html"
     }
   ],
