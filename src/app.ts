@@ -23,7 +23,7 @@ const app = express();
 app.use(helmet());
 
 const allowedOrigins = [
-  'https://vabatim.vercel.app',
+  'https://comfeeassistant.vercel.app',
   process.env.CORS_ORIGIN,
   process.env.APP_BASE_URL,
   'http://localhost:3000',
@@ -60,7 +60,7 @@ app.get('/', (req, res) => {
     name: 'Vabatim API Service',
     description: 'AI-Powered Accessibility & Wheelchair Documentation Assistant API for UK Clinicians',
     status: 'ONLINE',
-    frontend: 'https://vabatim.vercel.app',
+    frontend: 'https://comfeeassistant.vercel.app',
     health: '/health'
   });
 });

@@ -2,7 +2,7 @@
  * Mobile API Client Configuration
  * In production mode, resolves remote backend URL deployed to Render.
  */
-const RENDER_PRODUCTION_URL = 'https://vabatim-api.onrender.com';
+const RENDER_PRODUCTION_URL = 'https://comfeeassistant.onrender.com';
 const LOCAL_DEV_URL = 'http://localhost:3000';
 
 export function getApiBaseUrl(): string {
