@@ -2,7 +2,7 @@ const DEFAULT_API_URL = 'https://comfeeassistant.onrender.com';
 
 export const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || DEFAULT_API_URL;
 
-let authToken = '';
+let authToken = localStorage.getItem('comfee_auth_token') || '';
 
 function getAuthHeaders() {
   return {
@@ -39,6 +39,7 @@ export async function loginClinician(email: string, password?: string) {
   }
   const data = await res.json();
   authToken = data.token;
+  localStorage.setItem('comfee_auth_token', authToken);
   return data;
 }
 

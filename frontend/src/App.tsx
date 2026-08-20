@@ -9,7 +9,7 @@ type TemplateType = 'INITIAL_ASSESSMENT' | 'REVIEW';
 type SessionFormat = 'FACE_TO_FACE' | 'VIRTUAL';
 
 function App() {
-  const [screen, setScreen] = useState<Screen>('LOGIN');
+  const [screen, setScreen] = useState<Screen>(localStorage.getItem('comfee_auth_token') ? 'MEETINGS' : 'LOGIN');
   const [apiHealth, setApiHealth] = useState<any>(null);
   
   // Auth State

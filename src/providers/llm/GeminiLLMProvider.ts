@@ -67,6 +67,16 @@ export class GeminiLLMProvider implements LLMProvider {
       }
       
       const parsedJson = JSON.parse(cleanText);
+      
+      // The LLM sometimes nests templateType/sessionFormat exclusively inside sessionInfo
+      // and forgets to place them at the root as required by the schema. We patch them here.
+      if (!parsedJson.templateType && parsedJson.sessionInfo?.templateType) {
+        parsedJson.templateType = parsedJson.sessionInfo.templateType;
+      }
+      if (!parsedJson.sessionFormat && parsedJson.sessionInfo?.sessionFormat) {
+        parsedJson.sessionFormat = parsedJson.sessionInfo.sessionFormat;
+      }
+      
       return StructuredClinicalExtractionSchema.parse(parsedJson);
     } catch (e: any) {
       console.error('[GeminiLLMProvider] Failed to parse or validate LLM response:', e);
