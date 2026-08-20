@@ -154,9 +154,20 @@ function App() {
       <main className="mainContent">
         {screen === 'LOGIN' && (
           <div className="card">
-            <h2>Clinician Sign-In</h2>
-            <p className="hint">UK NHS Trust Seating & Mobility Clinical Portal</p>
-            <form onSubmit={handleLogin} className="form">
+            <h2>Secure Clinician Access</h2>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              const btn = e.currentTarget.querySelector('button');
+              if (btn) btn.disabled = true;
+              try {
+                await loginClinician(clinicianEmail, clinicianPassword);
+                setScreen('MEETINGS');
+              } catch (err: any) {
+                console.error('Login Error:', err);
+                alert(`Login failed: ${err.message || 'Unknown error'}`);
+                if (btn) btn.disabled = false;
+              }
+            }} className="form">
               <label className="label">Clinician Email (NHS.net)</label>
               <input type="email" value={clinicianEmail} onChange={(e) => setClinicianEmail(e.target.value)} className="input" required />
               <label className="label">Password</label>
