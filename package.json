@@ -4,7 +4,7 @@
   "description": "AI-Powered Accessibility & Wheelchair Documentation Assistant for UK Clinicians",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "typecheck": "tsc --noEmit",
