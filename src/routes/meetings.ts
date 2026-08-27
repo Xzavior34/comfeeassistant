@@ -69,9 +69,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     });
 
     res.status(201).json({ meeting });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating meeting:', error);
-    res.status(500).json({ error: 'Failed to create meeting' });
+    res.status(500).json({ error: 'Failed to create meeting', details: error?.message || 'Unknown database error' });
   }
 });
 
