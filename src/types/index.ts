@@ -80,10 +80,31 @@ export interface ProcessingFailureWarnings {
   speechRecognitionFailure?: boolean;
   lowConfidenceTranscription?: boolean;
   missingSpeakerIdentification?: boolean;
+  /** The speech engine returned no confidence scores at all for this session. */
+  confidenceUnavailable?: boolean;
   geminiProcessingFailure?: boolean;
   groundingValidationFailure?: boolean;
   rapidSpeechWarning?: boolean;
+  /** The note was produced by the deterministic fallback, not by the clinical model. */
+  deterministicFallbackUsed?: boolean;
   warningMessages: string[];
+}
+
+export type ReviewFlagType =
+  | 'CONTRADICTION'
+  | 'UNDER_SPECIFIED'
+  | 'MEASUREMENT_INCOMPLETE'
+  | 'SAFETY_CRITICAL_GAP'
+  | 'ACTION_OWNER_UNCLEAR'
+  | 'EQUIPMENT_SPEC_INCOMPLETE'
+  | 'REASONING_NEEDS_CONFIRMATION'
+  | 'TRANSCRIPTION_UNCERTAIN'
+  | 'OTHER';
+
+export interface ClinicianReviewFlag {
+  flagType: ReviewFlagType;
+  description: string;
+  segmentIds: string[];
 }
 
 export interface SessionInformation {
@@ -152,6 +173,8 @@ export interface StructuredClinicalExtraction {
   noteType?: 'professional_wheelchair_seating_note';
   templateType: TemplateType;
   sessionFormat: SessionFormat;
+  /** Version of the prompt/extraction contract that produced this note. */
+  promptVersion?: string;
   sessionInfo: SessionInformation;
   subjectiveInfo: SubjectiveInformation;
   functionalAssessment: FunctionalAssessment;
@@ -159,6 +182,12 @@ export interface StructuredClinicalExtraction {
   seatingPosturalAssessment: SeatingPosturalAssessment;
   pressureManagement: PressureManagement;
   equipmentAssessment: WheelchairSeatingEquipment;
+  // Sections required by the clinical documentation template.
+  environmentAndTransport?: EvidenceLinkedClaim[];
+  trialAndSelection?: EvidenceLinkedClaim[];
+  agreementAndSignOff?: EvidenceLinkedClaim[];
+  outstandingConcerns?: EvidenceLinkedClaim[];
+
   clinicalReasoning: EvidenceLinkedClaim[];
   recommendationsAndActions: EvidenceLinkedClaim[];
   followUpPlan: EvidenceLinkedClaim[];
@@ -183,6 +212,18 @@ export interface StructuredClinicalExtraction {
   matAssessmentInfo: EvidenceLinkedClaim[];
   actionsAndRecommendations: EvidenceLinkedClaim[];
   unstatedOrMissingFields: string[];
+
+  /** Items the clinician must resolve before the draft can be approved. */
+  clinicianReviewFlags?: ClinicianReviewFlag[];
+
+  /** How each diarised voice was attributed to a clinical role, and on what evidence. */
+  voiceAttribution?: Array<{
+    speakerId: string;
+    role: string | null;
+    confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE';
+    rationale: string[];
+    speakingShare: number;
+  }>;
 
   // System Warning State
   warnings?: ProcessingFailureWarnings;

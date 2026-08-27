@@ -40,8 +40,14 @@ describe('Professional Clinical Note Generation & Governance Suite', () => {
   it('1. System prompt instructs Gemini as a Professional Clinical Documentation Assistant', () => {
     const prompt = generateSystemPrompt();
     expect(prompt).toContain('clinical documentation assistant');
-    expect(prompt).toContain('YOU DO NOT DIAGNOSE');
-    expect(prompt).toContain('SPEECH CORRECTION');
+    // Core safeguards from the Clinical AI Documentation Template, Layer 1.
+    expect(prompt).toContain('Do not invent, assume, hallucinate');
+    expect(prompt).toContain('Do not treat silence as a negative finding');
+    expect(prompt).toContain('confirmed diagnosis');
+    // The prompt must state the output contract, not just the safeguards.
+    expect(prompt).toContain('OUTPUT CONTRACT');
+    expect(prompt).toContain('EVIDENCE IS MANDATORY');
+    expect(prompt).toContain('CLINICIAN REVIEW FLAGS');
     expect(prompt).not.toContain('generic summary');
   });
 

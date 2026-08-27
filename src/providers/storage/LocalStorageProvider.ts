@@ -24,6 +24,14 @@ export class LocalStorageProvider implements StorageProvider {
     return `file://${filePath}`;
   }
 
+  async retrieve(key: string): Promise<Buffer> {
+    const filePath = path.join(this.storageDir, key.replace(/^file:\/\//, ''));
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`[LocalStorageProvider] Object not found: ${key}`);
+    }
+    return fs.readFileSync(filePath);
+  }
+
   async getSignedUrl(key: string, expiresInSeconds: number): Promise<string> {
     const token = Buffer.from(`${key}:${Date.now() + expiresInSeconds * 1000}`).toString('base64url');
     return `${env.APP_BASE_URL}/api/documents/secure-access?token=${token}&key=${encodeURIComponent(key)}`;

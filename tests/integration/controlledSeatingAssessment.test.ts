@@ -43,14 +43,16 @@ describe('Controlled Seating Assessment End-to-End Pipeline Audit', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({
         meetingId,
-        sampleRate: 16000,
-        channelCount: 1,
-        format: 'audio/wav',
+        audioBase64: Buffer.alloc(2048, 1).toString('base64'),
+        mimeType: 'audio/wav',
         durationMs: 45000
       });
 
     expect(uploadRes.status).toBe(200);
-    expect(uploadRes.body.recording.processingStatus).toBe('COMPLETED');
+    expect(uploadRes.body.recording.storageKey).toContain(meetingId);
+    // Transcription is asynchronous: the upload reports the recording as accepted for
+    // processing, never as already complete.
+    expect(['QUEUED', 'PENDING']).toContain(uploadRes.body.recording.processingStatus);
     performanceTracker.recordPhase(meetingId, 'speechProcessingDurationMs', 150);
     performanceTracker.recordPhase(meetingId, 'aiExtractionDurationMs', 80);
 

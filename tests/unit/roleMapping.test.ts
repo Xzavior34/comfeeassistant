@@ -57,7 +57,10 @@ describe('Role Mapping Dynamics & Independence', () => {
     expect(canonical2[0].startTimeMs).toBe(canonical1[0].startTimeMs);
 
     const note2 = await aiService.extractStructuredClinicalNote(canonical2);
-    // Extracted client concerns now reflect the remapped role
-    expect(note2.clientConcerns[0].value).toContain('Not');
+    // Client-attributed content now follows the remapped role: the hip-pain statement is
+    // attributed to the therapist and must no longer appear as a client-reported concern.
+    const clientText2 = note2.clientConcerns.map((c) => c.value).join(' ');
+    expect(clientText2).not.toContain('hip pain');
+    expect(clientText2).toContain('cushion');
   });
 });

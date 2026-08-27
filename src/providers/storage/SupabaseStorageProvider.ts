@@ -33,6 +33,19 @@ export class SupabaseStorageProvider implements StorageProvider {
     return `supabase://${this.bucketName}/${result.path}`;
   }
 
+  async retrieve(key: string): Promise<Buffer> {
+    if (!this.supabase) {
+      throw new Error('[SupabaseStorageProvider] Storage not configured; cannot retrieve object.');
+    }
+
+    const { data, error } = await this.supabase.storage.from(this.bucketName).download(key);
+    if (error || !data) {
+      throw new Error(`[SupabaseStorageProvider] Download failed for ${key}: ${error?.message}`);
+    }
+
+    return Buffer.from(await data.arrayBuffer());
+  }
+
   async getSignedUrl(key: string, expiresInSeconds: number): Promise<string> {
     if (!this.supabase) {
       const baseUrl = env.APP_BASE_URL;

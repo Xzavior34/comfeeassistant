@@ -53,15 +53,16 @@ describe('UK Wheelchair & MAT Clinical Terminology Pipeline Verification', () =>
     const note = await aiService.extractStructuredClinicalNote(ukClinicalTermsSegments);
 
     // Verify MAT assessment extraction
-    expect(note.matAssessmentInfo[0].value).toContain('pelvic tilt');
-    expect(note.matAssessmentInfo[0].value).toContain('pelvic obliquity');
+    const matText = note.matAssessmentInfo.map((c) => c.value).join(' ');
+    expect(matText).toContain('pelvic tilt');
+    expect(matText).toContain('pelvic obliquity');
 
     // Verify Seating & Cushion extraction
-    expect(note.wheelchairSeatingConcerns[0].value).toContain('pelvic');
+    expect(note.wheelchairSeatingConcerns.map((c) => c.value).join(' ')).toContain('pelvic');
 
     // Verify Action & Barrier extraction
-    expect(note.actionsAndRecommendations[0].value).toContain('recommend');
-    expect(note.accessibilityBarriers[0].value).toContain('threshold ramp');
+    expect(note.actionsAndRecommendations.map((c) => c.value).join(' ')).toContain('recommend');
+    expect(note.accessibilityBarriers.map((c) => c.value).join(' ')).toContain('threshold ramp');
 
     // Deterministic evidence validation pass
     const validationResult = validator.validate(note, ukClinicalTermsSegments);

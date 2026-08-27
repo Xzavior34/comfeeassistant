@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { API_BASE_URL, checkApiHealth, loginClinician, createMeeting, recordConsent, submitTranscriptAndProcess, approveReview } from './services/api';
+import { API_BASE_URL, checkApiHealth, loginClinician, createMeeting, recordConsent, submitTranscriptAndProcess, approveReview, uploadRecording } from './services/api';
 import { deviceSpeech, SpeechSegment } from './services/speech';
+import { consultationRecorder, ConsultationAudioRecorder } from './services/audioRecorder';
 import { MetricsDashboard } from './components/MetricsDashboard';
 import './App.css';
 
@@ -29,6 +30,8 @@ function App() {
   const [segments, setSegments] = useState<SpeechSegment[]>([]);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [isSpeechSupported, setIsSpeechSupported] = useState(true);
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const [processingNote, setProcessingNote] = useState<string>('');
 
   // Result State
   const [extractionResult, setExtractionResult] = useState<any>(null);
@@ -87,6 +90,27 @@ function App() {
       setSpeechError('W3C SpeechRecognition is not available on this browser/device.');
     }
 
+    // Record the consultation as well as running live recognition. Browser recognition
+    // gives the clinician immediate on-screen text but cannot separate speakers; the
+    // recording is what the diarising cloud recogniser transcribes into the actual record.
+    if (ConsultationAudioRecorder.isSupported()) {
+      try {
+        await consultationRecorder.start();
+        setIsRecordingAudio(true);
+      } catch (err: any) {
+        setIsRecordingAudio(false);
+        setSpeechError(
+          `Audio recording unavailable (${err?.message ?? err}). The session will continue, but ` +
+            'speakers cannot be identified and statements will be recorded as unattributed.'
+        );
+      }
+    } else {
+      setSpeechError(
+        'This browser cannot record audio, so speakers cannot be identified. Statements will be ' +
+          'recorded as unattributed.'
+      );
+    }
+
     setIsListening(true);
     setTimerSeconds(0);
     setSegments([]);
@@ -106,7 +130,36 @@ function App() {
     const finalSegs = captured.length > 0 ? captured : segments;
     setScreen('PROCESSING');
 
+    // Send the recording first. When it is accepted, diarised transcription produces the
+    // authoritative note and the live transcript is only a fallback.
+    let diarisedQueued = false;
+    if (isRecordingAudio) {
+      try {
+        setProcessingNote('Uploading recording for speaker-differentiated transcription…');
+        const recording = await consultationRecorder.stop();
+        const uploaded = await uploadRecording(
+          meetingId,
+          recording.blob,
+          recording.mimeType,
+          recording.durationMs
+        );
+        diarisedQueued = uploaded?.recording?.processingStatus === 'QUEUED';
+      } catch (err: any) {
+        console.error('Recording upload failed:', err);
+        setProcessingNote(
+          `Recording could not be uploaded (${err?.message ?? err}). Falling back to the live ` +
+            'transcript, which cannot identify speakers.'
+        );
+      }
+      setIsRecordingAudio(false);
+    }
+
     try {
+      setProcessingNote(
+        diarisedQueued
+          ? 'Recording queued for speaker-differentiated transcription. Generating an interim draft from the live transcript…'
+          : 'Generating draft from the live transcript. Speakers were not identified.'
+      );
       const result = await submitTranscriptAndProcess(meetingId, finalSegs, 'Clinician', clientRef, templateType, sessionFormat);
       setExtractionResult(result);
       setTimeout(() => setScreen('REVIEW'), 1500);
@@ -114,6 +167,8 @@ function App() {
       console.error('Processing error:', err);
       alert(`Transcript processing failed: ${err.message || 'Server error'}`);
       setScreen('RECORDING');
+    } finally {
+      setProcessingNote('');
     }
   };
 
@@ -282,9 +337,10 @@ function App() {
         {screen === 'PROCESSING' && (
           <div className="card" style={{ textAlign: 'center', padding: '40px' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚙️</div>
-            <h2>Processing Meeting Audio & Gemini Extraction...</h2>
+            <h2>Processing the consultation</h2>
             <p className="hint">
-              Canonicalization ➔ Gemini Structured Extraction ({templateType}) ➔ Grounding Verification
+              {processingNote ||
+                'Transcription ➔ clinical extraction ➔ evidence grounding ➔ completeness review'}
             </p>
           </div>
         )}

@@ -23,9 +23,11 @@ const app = express();
 // Security & CORS Middleware
 app.use(helmet());
 
+// CORS_ORIGIN accepts a comma-separated list so preview deployments can be allowed
+// alongside production. Requests proxied through the Vercel rewrite are same-origin and
+// never reach this check.
 const allowedOrigins = [
-  'https://comfeeassistant.vercel.app',
-  process.env.CORS_ORIGIN,
+  ...(process.env.CORS_ORIGIN ?? '').split(',').map((o) => o.trim()),
   process.env.APP_BASE_URL,
   'http://localhost:3000',
   'http://localhost:5173'
@@ -45,7 +47,10 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-app.use(express.json());
+// Ordinary API traffic is small; a tight limit here is a cheap denial-of-service control.
+// The recording upload is the one exception and raises its own limit below, rather than
+// every endpoint accepting multi-megabyte bodies.
+app.use(express.json({ limit: '256kb' }));
 
 // Rate Limiting
 const limiter = rateLimit({
@@ -55,6 +60,11 @@ const limiter = rateLimit({
   legacyHeaders: false
 });
 app.use(limiter);
+
+// Consultation audio arrives base64-encoded, so the body is roughly a third larger than the
+// recording. 20 MB accommodates the 12 MB audio cap the route enforces. Without this the
+// default 100 KB limit rejects every upload with 413 before the handler ever runs.
+app.use('/api/recordings', express.json({ limit: '20mb' }));
 
 // Root Operational Route
 app.get('/', (req, res) => {

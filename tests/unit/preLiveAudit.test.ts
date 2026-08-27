@@ -15,7 +15,7 @@ describe('Pre-Live Credential & Model Audit Verification', () => {
     const speech = new GoogleSpeechProvider();
     const health = await speech.checkHealth();
     expect(health.status).toBe('NOT CONFIGURED');
-    expect(health.providerName).toBe('GoogleCloudSpeechv2');
+    expect(health.providerName).toBe('GoogleCloudSpeech');
   });
 
   it('LLM provider factory should return MockLLMProvider in development mode', () => {

@@ -58,7 +58,7 @@ describe('Fast-Speech & Rapid Transcription Robustness Suite (10 Audited Scenari
 
     const note = await aiService.extractStructuredClinicalNote(canonical);
     expect(note.warnings?.rapidSpeechWarning).toBe(true);
-    expect(note.warnings?.warningMessages[0]).toContain('Some speech may have been unclear or incorrectly transcribed');
+    expect(note.warnings?.warningMessages.join(' ')).toContain('may have been transcribed incorrectly');
   });
 
   it('4. Multiple consecutive speakers in rapid succession', async () => {
@@ -148,6 +148,8 @@ describe('Fast-Speech & Rapid Transcription Robustness Suite (10 Audited Scenari
 
     const valResult = validator.validate(note, canonical);
     expect(valResult.isValid).toBe(true);
-    expect(note.recommendationsAndActions[0].evidence[0].segmentId).toBe(canonical[0].id);
+    const recommendation = note.recommendationsAndActions.find((c) => /recommend/i.test(c.value));
+    expect(recommendation).toBeDefined();
+    expect(recommendation!.evidence[0].segmentId).toBe(canonical[0].id);
   });
 });

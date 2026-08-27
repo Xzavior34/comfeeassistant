@@ -1,6 +1,7 @@
 import { getSpeechProvider } from '../providers/speech';
-import { normalizeToCanonicalTranscript } from '../services/canonicalTranscript';
-import { AIExtractionService } from '../services/aiExtraction';
+import { normalizeWithVoiceAttribution } from '../services/canonicalTranscript';
+import { describeAttribution } from '../services/voiceRoleAttribution';
+import { getLLMProvider } from '../providers/llm';
 import { GroundingValidator } from '../services/groundingValidator';
 import { DocumentGeneratorService } from '../services/documentGenerator';
 import { auditLogger } from '../services/auditLogger';
@@ -12,20 +13,39 @@ import { getBullMQRedisOptions } from '../config/redis';
 
 export const QUEUE_NAME = 'vabatim-clinical-pipeline';
 
+/** Session-specific recognition hints that materially improve accuracy when supplied. */
+export interface RecognitionHints {
+  /** Equipment models, the person's vocabulary, clinician names. Boosted during recognition. */
+  sessionPhrases?: string[];
+  expectedSpeakerCount?: number;
+  /** Speaker-to-role assignments the clinician has already confirmed. */
+  knownSpeakers?: Record<string, any>;
+}
+
 export class QueueManager {
   private speech = getSpeechProvider();
-  private ai = new AIExtractionService();
+  private llm = getLLMProvider();
   private validator = new GroundingValidator();
   private docGen = new DocumentGeneratorService();
   private queue: Queue | null = null;
 
   constructor() {
+    // Constructing the Queue opens a Redis connection that keeps the event loop alive.
+    // Under test that turns a passing suite into a hang, and a test run should not be
+    // reaching the network in any case.
+    if (process.env.NODE_ENV === 'test') return;
+
     try {
       const connection = getBullMQRedisOptions();
       this.queue = new Queue(QUEUE_NAME, { connection });
     } catch (err) {
-      console.warn('[QueueManager]: Redis queue initialization notice - running in direct execution mode');
+      console.warn('[QueueManager]: Redis queue unavailable - background processing disabled');
     }
+  }
+
+  /** True when a durable queue is available to accept background work. */
+  isQueueAvailable(): boolean {
+    return this.queue !== null;
   }
 
   async enqueueMeetingJob(
@@ -34,7 +54,8 @@ export class QueueManager {
     clinicianName: string,
     clientRef: string,
     templateType: TemplateType = 'INITIAL_ASSESSMENT',
-    sessionFormat: SessionFormat = 'FACE_TO_FACE'
+    sessionFormat: SessionFormat = 'FACE_TO_FACE',
+    recognition: RecognitionHints = {}
   ) {
     if (this.queue) {
       const job = await this.queue.add('process-meeting', {
@@ -43,13 +64,22 @@ export class QueueManager {
         clinicianName,
         clientRef,
         templateType,
-        sessionFormat
+        sessionFormat,
+        recognition
       });
       console.log(`[QueueManager]: Enqueued meeting job ${job.id} for meeting ${meetingId}`);
       return job;
     } else {
       console.log(`[QueueManager]: Redis queue offline, executing pipeline synchronously for meeting ${meetingId}`);
-      return this.processFullMeetingPipeline(meetingId, audioUri, clinicianName, clientRef, templateType, sessionFormat);
+      return this.processFullMeetingPipeline(
+        meetingId,
+        audioUri,
+        clinicianName,
+        clientRef,
+        templateType,
+        sessionFormat,
+        recognition
+      );
     }
   }
 
@@ -59,7 +89,8 @@ export class QueueManager {
     clinicianName: string,
     clientRef: string,
     templateType: TemplateType = 'INITIAL_ASSESSMENT',
-    sessionFormat: SessionFormat = 'FACE_TO_FACE'
+    sessionFormat: SessionFormat = 'FACE_TO_FACE',
+    recognition: RecognitionHints = {}
   ) {
     console.log(`[QueueManager]: Starting async pipeline for meeting ${meetingId} (Template: ${templateType})...`);
 
@@ -72,19 +103,55 @@ export class QueueManager {
       resourceId: meetingId
     });
 
-    const rawTranscript = await this.speech.transcribe(audioUri, { expectedSpeakerCount: 2, enableDiarization: true });
+    const rawTranscript = await this.speech.transcribe(audioUri, {
+      expectedSpeakerCount: recognition.expectedSpeakerCount ?? 2,
+      enableDiarization: true,
+      additionalPhrases: recognition.sessionPhrases ?? []
+    });
 
-    // 2. Canonicalization
-    const canonicalSegments = normalizeToCanonicalTranscript(meetingId, rawTranscript);
-
-    // 3. AI Extraction
-    const extractedNote = await this.ai.extractStructuredClinicalNote(
-      canonicalSegments,
-      templateType,
-      sessionFormat,
-      clientRef,
-      clinicianName
+    // 2. Canonicalisation, with each diarised voice attributed to a clinical role from the
+    // conversation itself rather than from a fixed speaker-number convention.
+    const { segments: canonicalSegments, attribution } = normalizeWithVoiceAttribution(
+      meetingId,
+      rawTranscript,
+      { knownAssignments: recognition.knownSpeakers }
     );
+
+    console.log(`[QueueManager]: ${describeAttribution(attribution)}`);
+
+    // 3. AI Extraction via the configured clinical language model.
+    // This pipeline previously called the deterministic keyword extractor directly, so the
+    // background path produced a mechanical note while the synchronous route used the LLM.
+    const extractedNote = await this.llm.extractStructuredNote(canonicalSegments);
+    extractedNote.templateType = templateType;
+
+    // Attribution is inference. The clinician is told what was inferred and asked to confirm
+    // it, rather than the note presenting it as established fact.
+    extractedNote.voiceAttribution = attribution.assignments;
+    if (attribution.requiresClinicianConfirmation) {
+      extractedNote.warnings = {
+        ...(extractedNote.warnings ?? { warningMessages: [] }),
+        warningMessages: [
+          ...(extractedNote.warnings?.warningMessages ?? []),
+          `Speaker attribution was inferred from the conversation and needs confirmation. ${describeAttribution(attribution)}`
+        ]
+      };
+      extractedNote.clinicianReviewFlags = [
+        ...(extractedNote.clinicianReviewFlags ?? []),
+        {
+          flagType: 'UNDER_SPECIFIED',
+          description: `Confirm speaker attribution before approving. ${describeAttribution(attribution)}`,
+          segmentIds: []
+        }
+      ];
+    }
+    extractedNote.sessionFormat = sessionFormat;
+    if (extractedNote.sessionInfo) {
+      extractedNote.sessionInfo.clientReference = clientRef;
+      extractedNote.sessionInfo.clinicianName = clinicianName;
+      extractedNote.sessionInfo.templateType = templateType;
+      extractedNote.sessionInfo.sessionFormat = sessionFormat;
+    }
 
     // 4. Grounding Validation
     const validationResult = this.validator.validate(extractedNote, canonicalSegments);

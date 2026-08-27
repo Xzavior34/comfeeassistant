@@ -25,6 +25,6 @@ describe('Speech Providers Integration & API Contract Verification', () => {
     const azure = new AzureSpeechProvider();
     const health = await azure.checkHealth();
     expect(health.status).toBe('NOT CONFIGURED');
-    await expect(azure.transcribe('test.wav')).rejects.toThrow('Azure Speech SDK unavailable');
+    await expect(azure.transcribe('test.wav')).rejects.toThrow('AZURE_SPEECH_KEY');
   });
 });

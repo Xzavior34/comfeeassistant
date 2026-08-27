@@ -35,7 +35,7 @@ describe('Phase 5 Final System Acceptance Test Suite', () => {
     const uploadRes = await request(app)
       .post('/api/recordings/upload')
       .set('Authorization', `Bearer ${token}`)
-      .send({ meetingId, sampleRate: 16000, channelCount: 1, format: 'audio/wav', durationMs: 45000 });
+      .send({ meetingId, audioBase64: Buffer.alloc(2048, 1).toString('base64'), mimeType: 'audio/wav', durationMs: 45000 });
     expect(uploadRes.status).toBe(200);
 
     // Review & Sign

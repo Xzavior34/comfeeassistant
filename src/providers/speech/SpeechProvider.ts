@@ -4,6 +4,12 @@ export interface TranscriptionOptions {
   languageCode?: string;
   expectedSpeakerCount?: number;
   enableDiarization?: boolean;
+  /**
+   * Session-specific terms to boost during recognition: equipment model names, the person's
+   * own vocabulary, clinician names. Known-present terms are boosted harder than the
+   * general clinical lexicon.
+   */
+  additionalPhrases?: string[];
 }
 
 export interface ProviderHealthCheckResult {

@@ -1,9 +1,9 @@
 {
-  "version": 2,
-  "name": "vabatim-frontend",
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
+  "installCommand": "echo 'install handled by buildCommand'",
   "cleanUrls": true,
   "rewrites": [
     {
@@ -11,15 +11,11 @@
       "destination": "https://comfeeassistant.onrender.com/api/:path*"
     },
     {
-      "source": "/health/:path*",
-      "destination": "https://comfeeassistant.onrender.com/health/:path*"
-    },
-    {
       "source": "/health",
       "destination": "https://comfeeassistant.onrender.com/health"
     },
     {
-      "source": "/((?!assets|api|health|favicon.ico).*)",
+      "source": "/((?!assets|api|health|sw.js|workbox-.*|manifest.webmanifest|favicon.ico|.*\\.png).*)",
       "destination": "/index.html"
     }
   ],
@@ -30,8 +26,26 @@
         { "key": "X-Frame-Options", "value": "DENY" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" }
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains; preload"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "microphone=(self), camera=(), geolocation=(), interest-cohort=()"
+        }
       ]
+    },
+    {
+      "comment": "Clinical data must never be cached by a shared proxy or left in the browser.",
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, private" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     }
   ]
 }
