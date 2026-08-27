@@ -37,7 +37,6 @@
       ]
     },
     {
-      "comment": "Clinical data must never be cached by a shared proxy or left in the browser.",
       "source": "/api/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, private" }
