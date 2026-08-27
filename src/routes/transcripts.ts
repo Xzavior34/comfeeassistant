@@ -83,37 +83,62 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
       };
     });
 
-    // Process using LLM
-    const llm = getLLMProvider();
-    
-    // We expect the LLM to return a validated clinical note object
-    const validatedNote = await llm.extractStructuredNote(canonicalSegments as any);
-    validatedNote.templateType = templateType;
-    validatedNote.sessionFormat = sessionFormat;
-
+    // Persist session state to PROCESSING before calling Gemini
     await prisma.meeting.update({
       where: { id: meetingId },
-      data: { status: MeetingState.UNDER_REVIEW }
+      data: { status: MeetingState.PROCESSING }
     });
 
-    // Create the initial note version
-    await prisma.clinicalNote.create({
-      data: {
-        meetingId,
-        structuredJson: validatedNote as any,
-        status: 'DRAFT',
-        aiModel: llm.name,
-        promptVersion: PROMPT_VERSION,
-        versions: {
-          create: [{
-            versionNumber: 1,
-            structuredJson: validatedNote as any,
-            authorType: 'AI',
-            status: 'DRAFT'
-          }]
+    // Process using LLM
+    const llm = getLLMProvider();
+    let validatedNote: any;
+
+    try {
+      validatedNote = await llm.extractStructuredNote(canonicalSegments as any);
+      validatedNote.templateType = templateType;
+      validatedNote.sessionFormat = sessionFormat;
+
+      await prisma.meeting.update({
+        where: { id: meetingId },
+        data: { status: MeetingState.UNDER_REVIEW }
+      });
+
+      // Create or update the initial note version
+      await prisma.clinicalNote.upsert({
+        where: { meetingId },
+        create: {
+          meetingId,
+          structuredJson: validatedNote as any,
+          status: 'DRAFT',
+          aiModel: llm.name,
+          promptVersion: PROMPT_VERSION,
+          versions: {
+            create: [{
+              versionNumber: 1,
+              structuredJson: validatedNote as any,
+              authorType: 'AI',
+              status: 'DRAFT'
+            }]
+          }
+        },
+        update: {
+          structuredJson: validatedNote as any,
+          status: 'DRAFT',
+          aiModel: llm.name,
+          promptVersion: PROMPT_VERSION
         }
-      }
-    });
+      });
+    } catch (llmError: any) {
+      console.error('[Transcripts API] Gemini extraction failed:', llmError);
+      await prisma.meeting.update({
+        where: { id: meetingId },
+        data: { status: MeetingState.FAILED }
+      });
+      return res.status(502).json({
+        error: 'Clinical note generation failed. Your transcript has been preserved. Click Retry to try generating the note again.',
+        details: llmError.message || 'LLM extraction failed'
+      });
+    }
 
     res.json({
       message: 'Processing complete',
