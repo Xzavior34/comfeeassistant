@@ -23,44 +23,68 @@ export interface DiscoveredModelInfo {
   eligibleModelsCount: number;
 }
 
-/** Model families acceptable for clinical drafting, in order of preference. */
-const MODEL_PREFERENCE = [
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-pro',
-  'gemini-2.0-flash-lite'
-];
+export interface ProbeResult {
+  success: boolean;
+  status?: number;
+  errorCategory?: string;
+  message?: string;
+}
 
 let resolvedModelCache: DiscoveredModelInfo | null = null;
 
-export async function testMinimalModelGeneration(apiKey: string, modelName: string): Promise<boolean> {
+export async function testMinimalModelGeneration(
+  apiKey: string,
+  modelName: string
+): Promise<ProbeResult> {
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: modelName,
-      generationConfig: { responseMimeType: 'application/json' }
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0,
+        topP: 0.1,
+        maxOutputTokens: 256
+      }
     });
+
     const result = await model.generateContent('Return JSON: {"status":"ok"}');
     const text = result.response?.text?.();
-    return Boolean(text && text.includes('ok'));
+    if (!text || !text.trim()) {
+      return { success: false, errorCategory: 'EMPTY_RESPONSE', message: 'Probe returned empty response' };
+    }
+    return { success: true };
   } catch (err: any) {
-    console.warn(`[gemini] Minimal test failed for "${modelName}": ${err?.message || err}`);
-    return false;
+    const status = err?.status ?? err?.response?.status;
+    const msg = String(err?.message ?? err);
+
+    const is404 = status === 404 || /404|not found|is no longer available|retired/i.test(msg);
+    const is403 = status === 403 || status === 401 || /API_KEY_INVALID|PERMISSION_DENIED/i.test(msg);
+    const is429 = status === 429 || /rate limit|quota|RESOURCE_EXHAUSTED/i.test(msg);
+    const is400 = status === 400 || /INVALID_ARGUMENT|unsupported/i.test(msg);
+
+    let errorCategory = 'UNKNOWN';
+    if (is404) errorCategory = 'MODEL_NOT_FOUND';
+    else if (is403) errorCategory = 'AUTH_FAILURE';
+    else if (is429) errorCategory = 'RATE_LIMIT';
+    else if (is400) errorCategory = 'INVALID_CONFIG';
+
+    console.warn(
+      `[gemini-probe] Candidate "${modelName}" probe failed: status=${status || 'N/A'}, category=${errorCategory}, message="${msg.slice(0, 150)}"`
+    );
+
+    return { success: false, status, errorCategory, message: msg };
   }
 }
 
 /**
- * Picks a model that the API key can actually use.
- *
- * When GEMINI_MODEL is explicitly set in the environment, that exact model is attempted.
- * When GEMINI_MODEL is unset (undefined or empty), dynamic discovery queries the live
- * Google AI Studio /v1beta/models endpoint for models available to THIS key, filtering for
- * generateContent capability and structured JSON suitability.
+ * Picks a model that the API key can actually use by running execution capability probes.
  */
 export async function resolveAvailableModel(
   apiKey: string,
   configuredModel?: string,
-  forceRefresh = false
+  forceRefresh = false,
+  rejectedInRun: Set<string> = new Set()
 ): Promise<DiscoveredModelInfo> {
   if (resolvedModelCache && !forceRefresh) return resolvedModelCache;
 
@@ -68,6 +92,19 @@ export async function resolveAvailableModel(
 
   if (isExplicit) {
     const explicitName = configuredModel!.trim().replace(/^models\//, '');
+    console.log(`[gemini] GEMINI_MODEL explicitly configured as "${explicitName}". Running capability probe...`);
+    const probe = await testMinimalModelGeneration(apiKey, explicitName);
+
+    if (!probe.success) {
+      if (probe.errorCategory === 'AUTH_FAILURE') {
+        throw new Error(`Gemini API key authentication failed (HTTP ${probe.status || 403}). Check GEMINI_API_KEY.`);
+      }
+      if (probe.errorCategory === 'RATE_LIMIT') {
+        throw new Error('The clinical model is rate limited on the current API quota. Please try again in a few minutes.');
+      }
+      throw new Error(`Configured GEMINI_MODEL "${explicitName}" is not available to this API key or failed generation probe.`);
+    }
+
     const info: DiscoveredModelInfo = {
       modelName: explicitName,
       isExplicit: true,
@@ -78,82 +115,105 @@ export async function resolveAvailableModel(
     return info;
   }
 
-  // GEMINI_MODEL is UNSET -> Perform dynamic discovery
+  // GEMINI_MODEL is UNSET -> Perform capability-probed dynamic discovery
+  console.log('[gemini] GEMINI_MODEL is unset. Initiating execution-verified model discovery...');
+
+  let candidateModels: string[] = [];
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
     );
     if (!res.ok) {
-      console.warn(`[gemini] ListModels returned HTTP ${res.status}`);
-      throw new Error(`ListModels HTTP ${res.status}`);
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(`Gemini API key authentication failed (HTTP ${res.status}). Check GEMINI_API_KEY.`);
+      }
+      throw new Error(`ListModels returned HTTP ${res.status}`);
     }
 
     const data: any = await res.json();
     const rawModels: any[] = Array.isArray(data?.models) ? data.models : [];
 
-    const candidateModels: string[] = rawModels
+    candidateModels = rawModels
       .filter((m: any) => {
         const methods = Array.isArray(m.supportedGenerationMethods) ? m.supportedGenerationMethods : [];
         if (!methods.includes('generateContent')) return false;
 
         const name = String(m.name || '').toLowerCase();
-        if (
-          name.includes('embedding') ||
-          name.includes('imagen') ||
-          name.includes('bison') ||
-          name.includes('gemini-1.0') ||
-          name.includes('gemini-2.5-flash')
-        ) {
+        if (name.includes('embedding') || name.includes('imagen') || name.includes('bison') || name.includes('gemini-1.0')) {
           return false;
         }
         return true;
       })
       .map((m: any) => String(m.name).replace(/^models\//, ''));
 
-    if (candidateModels.length === 0) {
-      throw new Error('No compatible Gemini models supporting generateContent are available for this API key');
-    }
+    // Preference order including Google's latest recommended models
+    const MODEL_PREFERENCE = [
+      'gemini-3.1-pro-preview',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+      'gemini-2.0-flash-lite'
+    ];
 
-    let selected: string | null = null;
-    let method: 'dynamic_discovered' | 'fallback_selected' = 'dynamic_discovered';
-
+    const orderedCandidates: string[] = [];
     for (const pref of MODEL_PREFERENCE) {
       const match = candidateModels.find((m) => m === pref) ?? candidateModels.find((m) => m.startsWith(pref));
-      if (match) {
-        selected = match;
-        break;
+      if (match && !orderedCandidates.includes(match)) {
+        orderedCandidates.push(match);
+      }
+    }
+    for (const cand of candidateModels) {
+      if (!orderedCandidates.includes(cand)) {
+        orderedCandidates.push(cand);
       }
     }
 
-    if (!selected) {
-      selected = candidateModels[0];
-      method = 'fallback_selected';
+    if (orderedCandidates.length === 0) {
+      throw new Error('No compatible Gemini models supporting generateContent are available for this API key');
     }
 
-    console.log(
-      `[gemini] Dynamic discovery found ${candidateModels.length} eligible model(s). Selected "${selected}" (method: ${method}).`
-    );
+    console.log(`[gemini] Discovery returned ${orderedCandidates.length} candidate model(s). Probing execution capabilities...`);
 
-    const info: DiscoveredModelInfo = {
-      modelName: selected,
-      isExplicit: false,
-      selectionMethod: method,
-      eligibleModelsCount: candidateModels.length
-    };
+    for (const candidate of orderedCandidates) {
+      if (rejectedInRun.has(candidate)) {
+        console.log(`[gemini] Skipping candidate "${candidate}" (already rejected in current discovery run).`);
+        continue;
+      }
 
-    resolvedModelCache = info;
-    return info;
+      console.log(`[gemini] Probing candidate model "${candidate}"...`);
+      const probe = await testMinimalModelGeneration(apiKey, candidate);
+
+      if (probe.success) {
+        console.log(`[gemini] Capability probe SUCCESS for candidate "${candidate}". Caching verified model.`);
+        const info: DiscoveredModelInfo = {
+          modelName: candidate,
+          isExplicit: false,
+          selectionMethod: 'dynamic_discovered',
+          eligibleModelsCount: candidateModels.length
+        };
+        resolvedModelCache = info;
+        return info;
+      }
+
+      if (probe.errorCategory === 'AUTH_FAILURE') {
+        throw new Error(`Gemini API key authentication failed during probing (HTTP ${probe.status || 403}). Check GEMINI_API_KEY.`);
+      }
+
+      if (probe.errorCategory === 'RATE_LIMIT') {
+        throw new Error('The clinical language model is rate limited on the current API quota. Please retry in a few minutes.');
+      }
+
+      rejectedInRun.add(candidate);
+      console.warn(`[gemini] Candidate "${candidate}" rejected during probe (category=${probe.errorCategory}). Trying next candidate...`);
+    }
+
+    throw new Error('No compatible Gemini model available to this API key passed the generation capability probe.');
   } catch (err: any) {
     const msg = String(err?.message ?? err);
-    console.warn(`[gemini] Dynamic model discovery failed (${msg}); defaulting to "gemini-1.5-flash".`);
-    const info: DiscoveredModelInfo = {
-      modelName: 'gemini-1.5-flash',
-      isExplicit: false,
-      selectionMethod: 'fallback_selected',
-      eligibleModelsCount: 0
-    };
-    resolvedModelCache = info;
-    return info;
+    if (msg.includes('authentication failed') || msg.includes('rate limited')) {
+      throw err;
+    }
+    throw new Error('No compatible Gemini model available to this API key passed the generation capability probe.');
   }
 }
 

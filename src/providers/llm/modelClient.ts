@@ -50,17 +50,17 @@ export class GeminiModelClient implements ModelClient {
     try {
       return await this.callWithRetries(model, userContent);
     } catch (err: any) {
-      // If a 404 occurs on a dynamically discovered model, invalidate cache and rediscover once.
       const status = err?.status ?? err?.response?.status;
       const message = String(err?.message ?? err);
-      const is404 = status === 404 || /404|not found|is not available/i.test(message);
+      const is404 = status === 404 || /404|not found|is not available|is no longer available|retired/i.test(message);
 
       if (is404 && !this.resolvedModelInfo.isExplicit) {
         console.warn(
-          `[gemini] Model "${this.resolvedModelInfo.modelName}" returned 404. Invalidating cache and re-discovering.`
+          `[gemini] Model "${this.resolvedModelInfo.modelName}" returned 404 during generation. Invalidating cache and re-discovering.`
         );
+        const rejected = new Set<string>([this.resolvedModelInfo.modelName]);
         resetModelCache();
-        this.resolvedModelInfo = await resolveAvailableModel(apiKey, env.GEMINI_MODEL, true);
+        this.resolvedModelInfo = await resolveAvailableModel(apiKey, env.GEMINI_MODEL, true, rejected);
 
         if (this.resolvedModelInfo) {
           model = genAI.getGenerativeModel({
@@ -76,12 +76,19 @@ export class GeminiModelClient implements ModelClient {
           return await this.callWithRetries(model, userContent);
         }
       }
+
+      if (/generativelanguage\.googleapis\.com|GoogleGenerativeAI/i.test(message)) {
+        throw new Error(
+          'Clinical documentation could not be generated because the AI service is temporarily unavailable. ' +
+            'Your transcript has been saved — please retry.'
+        );
+      }
       throw err;
     }
   }
 
   /**
-   * Handles the failure modes that actually occur, with safe server diagnostics and clinician-readable messages.
+   * Handles failure modes with safe server diagnostics and clean clinician-readable messages.
    */
   private async callWithRetries(model: any, userContent: string, maxAttempts = 3): Promise<string> {
     let lastError: any;
@@ -112,7 +119,7 @@ export class GeminiModelClient implements ModelClient {
 
         const isAuth = status === 401 || status === 403 || /API_KEY_INVALID|PERMISSION_DENIED|unauthorized/i.test(message);
         const isRateLimited = status === 429 || /rate limit|quota|RESOURCE_EXHAUSTED/i.test(message);
-        const isNotFound = status === 404 || /not found|is not available/i.test(message);
+        const isNotFound = status === 404 || /not found|is not available|is no longer available|retired/i.test(message);
         const isTransient = status === 503 || status === 500 || /timeout|ETIMEDOUT|ECONNRESET|overloaded/i.test(message);
 
         console.warn(
@@ -144,7 +151,10 @@ export class GeminiModelClient implements ModelClient {
               `Configured GEMINI_MODEL "${this.resolvedModelInfo.modelName}" is not available to this API key (HTTP 404). Update or unset GEMINI_MODEL.`
             );
           }
-          throw err; // Allow parent to trigger re-discovery once
+          throw new Error(
+            'Clinical documentation could not be generated because the AI service is temporarily unavailable. ' +
+              'Your transcript has been saved — please retry.'
+          );
         }
 
         if (!(isRateLimited || isTransient) || attempt === maxAttempts) break;
@@ -162,7 +172,13 @@ export class GeminiModelClient implements ModelClient {
           'saved — retry documentation generation in a few minutes.'
       );
     }
-    throw new Error(`The clinical model could not be reached: ${message.slice(0, 200)}`);
+    if (/generativelanguage\.googleapis\.com|GoogleGenerativeAI/i.test(message)) {
+      throw new Error(
+        'Clinical documentation could not be generated because the AI service is temporarily unavailable. ' +
+          'Your transcript has been saved — please retry.'
+      );
+    }
+    throw new Error('Clinical documentation could not be generated because the AI service is temporarily unavailable.');
   }
 }
 
