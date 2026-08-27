@@ -83,10 +83,10 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
       };
     });
 
-    // Persist session state to PROCESSING before calling Gemini
+    // Persist session state to EXTRACTION_RUNNING before calling Gemini
     await prisma.meeting.update({
       where: { id: meetingId },
-      data: { status: MeetingState.PROCESSING }
+      data: { status: MeetingState.EXTRACTION_RUNNING }
     });
 
     // Process using LLM
@@ -103,10 +103,9 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
         data: { status: MeetingState.UNDER_REVIEW }
       });
 
-      // Create or update the initial note version
-      await prisma.clinicalNote.upsert({
-        where: { meetingId },
-        create: {
+      // Create the initial note version
+      await prisma.clinicalNote.create({
+        data: {
           meetingId,
           structuredJson: validatedNote as any,
           status: 'DRAFT',
@@ -120,12 +119,6 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
               status: 'DRAFT'
             }]
           }
-        },
-        update: {
-          structuredJson: validatedNote as any,
-          status: 'DRAFT',
-          aiModel: llm.name,
-          promptVersion: PROMPT_VERSION
         }
       });
     } catch (llmError: any) {
