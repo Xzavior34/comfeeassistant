@@ -102,16 +102,55 @@ export async function submitTranscriptAndProcess(
   templateType: 'INITIAL_ASSESSMENT' | 'REVIEW' = 'INITIAL_ASSESSMENT',
   sessionFormat: 'FACE_TO_FACE' | 'VIRTUAL' = 'FACE_TO_FACE'
 ) {
+  // Sanitize and normalize transcript segments
+  const sanitizedSegments = (segments || [])
+    .filter((s: any) => s && typeof s.text === 'string' && s.text.trim().length > 0)
+    .map((s: any, idx: number) => {
+      const start = Math.round(Math.max(0, Number(s.startTimeMs) || 0));
+      const rawEnd = Math.round(Math.max(start, Number(s.endTimeMs) || start + 1000));
+      const end = rawEnd <= start ? start + 1000 : rawEnd;
+      const confidence = typeof s.confidence === 'number' && !isNaN(s.confidence)
+        ? Math.min(1, Math.max(0, s.confidence))
+        : null;
+
+      return {
+        id: s.id || `seg-${idx + 1}`,
+        speakerId: s.speakerId && s.speakerId !== 'UNKNOWN' ? String(s.speakerId) : 'UNKNOWN',
+        mappedRole: s.mappedRole || null,
+        text: s.text.trim(),
+        rawText: s.rawText ? String(s.rawText).trim() : s.text.trim(),
+        startTimeMs: start,
+        endTimeMs: end,
+        confidence,
+        isCorrected: Boolean(s.isCorrected),
+        engineTopHypothesis: s.engineTopHypothesis ? String(s.engineTopHypothesis) : s.text.trim()
+      };
+    });
+
+  if (sanitizedSegments.length === 0) {
+    throw new Error('No final transcript was captured. Your recording has been preserved.');
+  }
+
   const res = await fetch(`${API_BASE_URL}/api/transcripts/process`, {
     method: 'POST',
     headers: getAuthHeaders(),
-    body: JSON.stringify({ meetingId, segments, clinicianName, clientRef, templateType, sessionFormat })
+    body: JSON.stringify({
+      meetingId,
+      segments: sanitizedSegments,
+      clinicianName,
+      clientRef,
+      templateType,
+      sessionFormat
+    })
   });
+
   if (!res.ok) {
     let errorText = '';
     try {
       const errData = await res.json();
-      errorText = errData.error || errData.message || JSON.stringify(errData);
+      errorText = errData.details
+        ? `Validation error: ${Array.isArray(errData.details) ? errData.details.join(', ') : errData.details}`
+        : errData.error || errData.message || JSON.stringify(errData);
     } catch {
       errorText = await res.text().catch(() => res.statusText);
     }

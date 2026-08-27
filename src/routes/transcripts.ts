@@ -39,9 +39,11 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const parsed = ProcessRequestSchema.safeParse(req.body);
     if (!parsed.success) {
+      const errorDetails = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+      console.warn('[Transcripts API] Validation failed:', errorDetails);
       return res.status(400).json({
         error: 'Invalid request body',
-        details: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
+        details: errorDetails
       });
     }
     const { meetingId, segments, templateType, sessionFormat } = parsed.data;
@@ -59,14 +61,8 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
-    const roleMap = {
-      'Speaker 1': ParticipantRole.THERAPIST,
-      'Speaker 2': ParticipantRole.CLIENT
-    };
-
-    // Speaker attribution is resolved, never guessed. The previous version derived the role
-    // from whether the label happened to contain the character "1", which mislabelled
-    // patient statements as clinician statements (and threw when speakerId was absent).
+    // Role attribution is resolved from genuine diarisation or stays null (unattributed).
+    // Faking speaker roles by number mapping is strictly forbidden.
     const canonicalSegments = segments.map((s, idx) => {
       const wordCount = s.text.trim().split(/\s+/).filter(Boolean).length;
       const durationSeconds = Math.max(0.5, (s.endTimeMs - s.startTimeMs) / 1000);
@@ -77,7 +73,7 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
         id: s.id || `seg-${idx + 1}`,
         meetingId,
         speakerId: s.speakerId ?? 'UNKNOWN',
-        mappedRole: s.mappedRole ?? resolveParticipantRole(s.speakerId, roleMap),
+        mappedRole: s.mappedRole ?? resolveParticipantRole(s.speakerId, {}),
         text: s.text,
         startTimeMs: s.startTimeMs,
         endTimeMs: s.endTimeMs,

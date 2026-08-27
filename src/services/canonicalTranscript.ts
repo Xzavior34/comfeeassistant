@@ -65,10 +65,7 @@ export function normalizeWithVoiceAttribution(
 export function normalizeToCanonicalTranscript(
   meetingId: string,
   rawTranscript: ProviderTranscript,
-  roleMap: Record<string, ParticipantRole> = {
-    'Speaker 1': ParticipantRole.THERAPIST,
-    'Speaker 2': ParticipantRole.CLIENT
-  }
+  roleMap: Record<string, ParticipantRole> = {}
 ): CanonicalTranscriptSegment[] {
   return rawTranscript.segments.map((seg, idx) => {
     const prevSeg = rawTranscript.segments[idx - 1];

@@ -27,6 +27,7 @@ app.use(helmet());
 // alongside production. Requests proxied through the Vercel rewrite are same-origin and
 // never reach this check.
 const allowedOrigins = [
+  'https://comfeeassistant.vercel.app',
   ...(process.env.CORS_ORIGIN ?? '').split(',').map((o) => o.trim()),
   process.env.APP_BASE_URL,
   'http://localhost:3000',
@@ -35,10 +36,14 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    // In production, enforce strict origin matching against allowedOrigins
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (
+      !origin ||
+      allowedOrigins.includes(origin) ||
+      /\.vercel\.app$/.test(origin)
+    ) {
       callback(null, true);
     } else {
+      console.warn(`[CORS Blocked Origin]: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },

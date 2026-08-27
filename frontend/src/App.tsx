@@ -127,7 +127,20 @@ function App() {
     setIsListening(false);
     setInterimText('');
 
-    const finalSegs = captured.length > 0 ? captured : segments;
+    let finalSegs = captured.length > 0 ? captured : segments;
+    if (finalSegs.length === 0) {
+      finalSegs = [{
+        speakerId: 'UNKNOWN',
+        text: 'Consultation conducted. Spoken conversation was not captured by browser recognition.',
+        rawText: 'Consultation conducted. Spoken conversation was not captured by browser recognition.',
+        startTimeMs: 0,
+        endTimeMs: 1000,
+        confidence: null,
+        isCorrected: false,
+        alternativePromoted: false,
+        engineTopHypothesis: ''
+      }];
+    }
     setScreen('PROCESSING');
 
     // Send the recording first. When it is accepted, diarised transcription produces the
@@ -309,7 +322,9 @@ function App() {
             <div className="transcriptStream">
               {segments.map((seg, idx) => (
                 <div key={idx} className="segmentBubble">
-                  <span className="speakerLabel">{seg.speakerId}:</span>
+                  {seg.speakerId && seg.speakerId !== 'UNKNOWN' && (
+                    <span className="speakerLabel">{seg.speakerId}:</span>
+                  )}
                   <span>{seg.text}</span>
                 </div>
               ))}
