@@ -12,6 +12,19 @@ router.use(authenticateToken);
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userOrgId = req.user!.organisationId;
+    
+    // Stale processing recovery: if a meeting is stuck in EXTRACTION_RUNNING or TRANSCRIBING
+    // for over 5 minutes (e.g. server crash or restart), transition to FAILED so the clinician can retry.
+    const staleThreshold = new Date(Date.now() - 5 * 60 * 1000);
+    await prisma.meeting.updateMany({
+      where: {
+        organisationId: userOrgId,
+        status: { in: [MeetingState.EXTRACTION_RUNNING, MeetingState.TRANSCRIBING, MeetingState.UPLOADING] },
+        createdAt: { lt: staleThreshold }
+      },
+      data: { status: MeetingState.FAILED }
+    });
+
     const meetings = await prisma.meeting.findMany({
       where: { organisationId: userOrgId }
     });

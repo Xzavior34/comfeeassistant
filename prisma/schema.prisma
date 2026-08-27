@@ -53,9 +53,30 @@ enum MeetingState {
 
 enum NoteStatus {
   DRAFT
+  AI_GENERATED
+  REVIEW_REQUIRED
   UNDER_REVIEW
   APPROVED
+  FINALISED
+  EXPORTED
   REJECTED
+}
+
+/// Persisted state of a documentation-generation job.
+/// Stored in the database rather than in memory so a browser refresh, a navigation away, or
+/// a web-service restart does not destroy a clinician's completed consultation.
+enum ProcessingJobState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+/// Whether the assessment happened in the room or over a call.
+enum AssessmentMode {
+  IN_PERSON
+  REMOTE
 }
 
 model Organisation {
@@ -104,6 +125,35 @@ model Meeting {
   recordings           Recording[]
   transcriptSegments   TranscriptSegment[]
   clinicalNotes        ClinicalNote[]
+  processingJobs       ProcessingJob[]
+  assessmentMode       AssessmentMode      @default(IN_PERSON)
+  /// The frozen authoritative transcript, captured at End Assessment.
+  frozenTranscript     String?
+  frozenAt             DateTime?
+}
+
+/// A documentation-generation run. Created before any work begins, so an interrupted job is
+/// visible and retryable rather than silently lost.
+model ProcessingJob {
+  id             String             @id @default(uuid())
+  meetingId      String
+  meeting        Meeting            @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  organisationId String
+  state          ProcessingJobState @default(PENDING)
+  /// Coarse progress label shown to the clinician, e.g. "Generating assessment note".
+  stage          String             @default("Queued")
+  /// 0-100. Indicative only.
+  progress       Int                @default(0)
+  attempts       Int                @default(0)
+  lastError      String?
+  clinicalNoteId String?
+  createdAt      DateTime           @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  updatedAt      DateTime           @updatedAt
+
+  @@index([meetingId])
+  @@index([state])
 }
 
 model Participant {
@@ -170,9 +220,13 @@ model ClinicalNote {
   aiModel        String
   promptVersion  String
   schemaVersion  String     @default("1.0")
+  /// Rendered clinical narrative, generated from the validated structured extraction.
+  narrativeJson  Json?
   generatedAt    DateTime   @default(now())
   reviewedAt     DateTime?
   approvedAt     DateTime?
+  finalisedAt    DateTime?
+  exportedAt     DateTime?
   approvedById   String?
   approvedBy     User?      @relation("ApprovedNotes", fields: [approvedById], references: [id])
   evidenceItems  Evidence[]

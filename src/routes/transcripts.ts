@@ -167,4 +167,81 @@ router.get('/:meetingId', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+router.post('/:meetingId/retry', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { meetingId } = req.params;
+    const meeting = await prisma.meeting.findUnique({
+      where: { id: meetingId },
+      include: { transcriptSegments: true }
+    });
+
+    if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
+
+    if (meeting.organisationId !== req.user!.organisationId) {
+      return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
+    }
+
+    const segments = meeting.transcriptSegments || [];
+    if (segments.length === 0) {
+      return res.status(400).json({ error: 'No transcript segments available for retry.' });
+    }
+
+    await prisma.meeting.update({
+      where: { id: meetingId },
+      data: { status: MeetingState.EXTRACTION_RUNNING }
+    });
+
+    const canonicalSegments = segments.map((s, idx) => ({
+      id: s.id || `seg-${idx + 1}`,
+      meetingId,
+      speakerId: s.speakerId ?? 'UNKNOWN',
+      mappedRole: s.mappedRole ?? null,
+      text: s.text,
+      startTimeMs: s.startTimeMs,
+      endTimeMs: s.endTimeMs,
+      confidence: s.confidence,
+      rapidSpeechDetected: false,
+      speakingRateWps: 2.5
+    }));
+
+    const llm = getLLMProvider();
+    const validatedNote = await llm.extractStructuredNote(canonicalSegments as any);
+
+    await prisma.meeting.update({
+      where: { id: meetingId },
+      data: { status: MeetingState.UNDER_REVIEW }
+    });
+
+    await prisma.clinicalNote.create({
+      data: {
+        meetingId,
+        structuredJson: validatedNote as any,
+        status: 'DRAFT',
+        aiModel: llm.name,
+        promptVersion: PROMPT_VERSION,
+        versions: {
+          create: [{
+            versionNumber: 1,
+            structuredJson: validatedNote as any,
+            authorType: 'AI',
+            status: 'DRAFT'
+          }]
+        }
+      }
+    });
+
+    res.json({
+      message: 'Note regeneration complete',
+      note: validatedNote
+    });
+  } catch (error: any) {
+    console.error('Retry note generation error:', error);
+    await prisma.meeting.update({
+      where: { id: req.params.meetingId },
+      data: { status: MeetingState.FAILED }
+    });
+    res.status(500).json({ error: error.message || 'Failed to regenerate note' });
+  }
+});
+
 export default router;
