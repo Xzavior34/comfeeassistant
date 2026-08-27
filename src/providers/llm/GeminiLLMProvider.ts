@@ -28,7 +28,6 @@ const MODEL_PREFERENCE = [
   'gemini-2.0-flash',
   'gemini-1.5-flash',
   'gemini-1.5-pro',
-  'gemini-2.5-flash',
   'gemini-2.0-flash-lite'
 ];
 
@@ -98,7 +97,13 @@ export async function resolveAvailableModel(
         if (!methods.includes('generateContent')) return false;
 
         const name = String(m.name || '').toLowerCase();
-        if (name.includes('embedding') || name.includes('imagen') || name.includes('bison') || name.includes('gemini-1.0')) {
+        if (
+          name.includes('embedding') ||
+          name.includes('imagen') ||
+          name.includes('bison') ||
+          name.includes('gemini-1.0') ||
+          name.includes('gemini-2.5-flash')
+        ) {
           return false;
         }
         return true;
