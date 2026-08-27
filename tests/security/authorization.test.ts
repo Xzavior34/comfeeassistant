@@ -52,4 +52,28 @@ describe('Security & Authorization Hardening Tests (IDOR / BOLA Prevention)', ()
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Invalid document access link');
   });
+
+  it('4. CORS PRODUCTION ORIGIN: Accepts requests from https://comfeeassistant.vercel.app', async () => {
+    const res = await request(app)
+      .options('/health')
+      .set('Origin', 'https://comfeeassistant.vercel.app');
+
+    expect(res.headers['access-control-allow-origin']).toBe('https://comfeeassistant.vercel.app');
+  });
+
+  it('5. CORS LOCALHOST ORIGIN: Accepts requests from http://localhost:3000', async () => {
+    const res = await request(app)
+      .options('/health')
+      .set('Origin', 'http://localhost:3000');
+
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+  });
+
+  it('6. CORS REJECT UNAPPROVED ORIGIN: Rejects requests from unauthorized origins', async () => {
+    const res = await request(app)
+      .get('/health')
+      .set('Origin', 'https://unauthorized-malicious-site.com');
+
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
 });
