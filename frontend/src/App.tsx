@@ -210,7 +210,7 @@ function App() {
       wasRecordingAudio: false
     });
 
-    if (!transcriptText || transcriptText.length < 40) {
+    if (!transcriptText || transcriptText.trim().length < 5) {
       setStatusMessage(null);
       endingRef.current = false;
       alert(
