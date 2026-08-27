@@ -19,6 +19,8 @@
  * never stop the recorder, and vice versa.
  */
 
+declare const window: any;
+
 export interface TranscriptEntry {
   /** Committed text. No speaker attribution: the browser does not know and does not guess. */
   text: string;
@@ -35,31 +37,66 @@ export interface LiveTranscriptState {
   interimText: string;
 }
 
+export interface DiagnosticState {
+  recognition_available: boolean;
+  recognition_created: boolean;
+  recognition_start_requested: boolean;
+  recognition_started: boolean;
+  audio_start: boolean;
+  sound_start: boolean;
+  speech_start: boolean;
+  result_received: boolean;
+  speech_end: boolean;
+  sound_end: boolean;
+  audio_end: boolean;
+  recognition_end: boolean;
+  recognition_error: string | null;
+}
+
 export interface RecognitionDiagnostics {
   supported: boolean;
-  /** True once recognition has produced at least one final result. */
+  constructorName: 'SpeechRecognition' | 'webkitSpeechRecognition' | 'neither';
   producedAnyText: boolean;
   restartCount: number;
-  /** Set when recognition stopped for good, with the reason. */
   fatalError: string | null;
-  /** True when the engine never supplied confidence values. */
   confidenceUnavailable: boolean;
-  /** True when on-device processing was requested and accepted by the browser. */
   localProcessing: boolean;
+  diagnostics: DiagnosticState;
 }
 
 /** Errors after which restarting is pointless or harmful. */
-const FATAL_ERRORS = new Set(['not-allowed', 'service-not-allowed', 'language-not-supported', 'bad-grammar']);
+const FATAL_ERRORS = new Set([
+  'not-allowed',
+  'service-not-allowed',
+  'language-not-supported',
+  'audio-capture',
+  'bad-grammar'
+]);
+
+function getWindow(): any {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).window) return (globalThis as any).window;
+  if (typeof window !== 'undefined') return window;
+  return null;
+}
 
 function getRecognitionConstructor(): any {
-  if (typeof window === 'undefined') return null;
-  return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
+  const win = getWindow();
+  if (!win) return null;
+  return win.SpeechRecognition || win.webkitSpeechRecognition || null;
+}
+
+function getConstructorName(): 'SpeechRecognition' | 'webkitSpeechRecognition' | 'neither' {
+  const win = getWindow();
+  if (!win) return 'neither';
+  if (win.SpeechRecognition) return 'SpeechRecognition';
+  if (win.webkitSpeechRecognition) return 'webkitSpeechRecognition';
+  return 'neither';
 }
 
 export class LiveTranscriptionService {
   private recognition: any = null;
   private listening = false;
-  private stopping = false;
+  private intentionalStop = false;
   private sessionStartMs = 0;
 
   private finalEntries: TranscriptEntry[] = [];
@@ -69,13 +106,57 @@ export class LiveTranscriptionService {
   private restartAttempts = 0;
   private fatalError: string | null = null;
   private sawConfidence = false;
-  private localProcessing = false;
+
+  private diagnostics: DiagnosticState = {
+    recognition_available: false,
+    recognition_created: false,
+    recognition_start_requested: false,
+    recognition_started: false,
+    audio_start: false,
+    sound_start: false,
+    speech_start: false,
+    result_received: false,
+    speech_end: false,
+    sound_end: false,
+    audio_end: false,
+    recognition_end: false,
+    recognition_error: null
+  };
 
   private onUpdate: ((state: LiveTranscriptState) => void) | null = null;
   private onStatus: ((message: string) => void) | null = null;
+  private onDiagnostics: ((diag: DiagnosticState) => void) | null = null;
 
   static isSupported(): boolean {
     return getRecognitionConstructor() !== null;
+  }
+
+  static getConstructorName(): 'SpeechRecognition' | 'webkitSpeechRecognition' | 'neither' {
+    return getConstructorName();
+  }
+
+  private resetDiagnostics(): void {
+    this.diagnostics = {
+      recognition_available: LiveTranscriptionService.isSupported(),
+      recognition_created: false,
+      recognition_start_requested: false,
+      recognition_started: false,
+      audio_start: false,
+      sound_start: false,
+      speech_start: false,
+      result_received: false,
+      speech_end: false,
+      sound_end: false,
+      audio_end: false,
+      recognition_end: false,
+      recognition_error: null
+    };
+  }
+
+  private notifyDiagnostics(): void {
+    if (this.onDiagnostics) {
+      this.onDiagnostics({ ...this.diagnostics });
+    }
   }
 
   /**
@@ -83,70 +164,133 @@ export class LiveTranscriptionService {
    *
    * Resolves as soon as recognition has been requested. It never throws for an unsupported
    * browser: the assessment must still be recordable, and the caller is told through
-   * onStatus so it can show "Live transcription unavailable on this browser".
+   * onStatus so it can show "Live transcription is unavailable in this browser".
    */
-  start(onUpdate: (state: LiveTranscriptState) => void, onStatus: (message: string) => void): boolean {
+  start(
+    onUpdate: (state: LiveTranscriptState) => void,
+    onStatus: (message: string) => void,
+    onDiagnostics?: (diag: DiagnosticState) => void
+  ): boolean {
     const Ctor = getRecognitionConstructor();
     this.onUpdate = onUpdate;
     this.onStatus = onStatus;
+    this.onDiagnostics = onDiagnostics || null;
+
+    this.resetDiagnostics();
 
     if (!Ctor) {
-      onStatus('Live transcription is unavailable in this browser. Audio recording will continue.');
+      this.onStatus?.('Live transcription is unavailable in this browser. Audio recording will continue.');
+      this.notifyDiagnostics();
       return false;
     }
 
-    this.recognition = new Ctor();
-    this.recognition.continuous = true;
-    this.recognition.interimResults = true;
-    this.recognition.lang = 'en-GB';
-    this.recognition.maxAlternatives = 1;
-
-    // On-device recognition keeps the consultation off third-party servers. It is very new
-    // and absent almost everywhere, so it is feature-detected and simply skipped when the
-    // property is not present — never assumed.
     try {
-      if ('processLocally' in this.recognition) {
-        this.recognition.processLocally = true;
-        this.localProcessing = true;
-      }
-    } catch {
-      this.localProcessing = false;
-    }
+      this.recognition = new Ctor();
+      this.diagnostics.recognition_created = true;
 
-    this.sessionStartMs = Date.now();
-    this.listening = true;
-    this.stopping = false;
-    this.fatalError = null;
-    this.restartAttempts = 0;
+      this.recognition.continuous = true;
+      this.recognition.interimResults = true;
+      this.recognition.lang = 'en-GB';
+      this.recognition.maxAlternatives = 1;
 
-    this.recognition.onresult = (event: any) => this.handleResult(event);
+      // Note: We do NOT force processLocally = true because Chrome desktop requires standard network speech recognition.
 
-    this.recognition.onerror = (event: any) => {
-      const code = event?.error ?? 'unknown';
+      this.sessionStartMs = Date.now();
+      this.listening = true;
+      this.intentionalStop = false;
+      this.fatalError = null;
+      this.restartAttempts = 0;
 
-      if (FATAL_ERRORS.has(code)) {
-        this.fatalError = code;
-        this.listening = false;
-        onStatus(
-          code === 'not-allowed'
-            ? 'Microphone access was blocked, so live transcription has stopped.'
-            : `Live transcription stopped (${code}).`
-        );
-        return;
-      }
-      // 'no-speech' and 'aborted' are routine in a consultation with natural pauses.
-      if (code !== 'no-speech' && code !== 'aborted') {
-        onStatus(`Live transcription hiccup (${code}) — continuing.`);
-      }
-    };
+      // Attach ALL event handlers BEFORE start()
+      this.recognition.onstart = () => {
+        this.diagnostics.recognition_started = true;
+        this.notifyDiagnostics();
+        this.onStatus?.('Live transcription: Listening');
+      };
 
-    this.recognition.onend = () => this.handleEnd();
+      this.recognition.onaudiostart = () => {
+        this.diagnostics.audio_start = true;
+        this.notifyDiagnostics();
+      };
 
-    try {
+      this.recognition.onsoundstart = () => {
+        this.diagnostics.sound_start = true;
+        this.notifyDiagnostics();
+      };
+
+      this.recognition.onspeechstart = () => {
+        this.diagnostics.speech_start = true;
+        this.notifyDiagnostics();
+        this.onStatus?.('Live transcription: Speech detected');
+      };
+
+      this.recognition.onspeechend = () => {
+        this.diagnostics.speech_end = true;
+        this.notifyDiagnostics();
+      };
+
+      this.recognition.onsoundend = () => {
+        this.diagnostics.sound_end = true;
+        this.notifyDiagnostics();
+      };
+
+      this.recognition.onaudioend = () => {
+        this.diagnostics.audio_end = true;
+        this.notifyDiagnostics();
+      };
+
+      this.recognition.onresult = (event: any) => {
+        this.diagnostics.result_received = true;
+        this.notifyDiagnostics();
+        this.handleResult(event);
+      };
+
+      this.recognition.onerror = (event: any) => {
+        const code = String(event?.error ?? 'unknown');
+        this.diagnostics.recognition_error = code;
+        this.notifyDiagnostics();
+
+        if (FATAL_ERRORS.has(code)) {
+          this.fatalError = code;
+          this.listening = false;
+          if (code === 'not-allowed') {
+            this.onStatus?.('Live transcription error: Microphone access was blocked by the browser.');
+          } else if (code === 'service-not-allowed') {
+            this.onStatus?.('Live transcription error: Speech recognition service is blocked.');
+          } else if (code === 'audio-capture') {
+            this.onStatus?.('Live transcription error: Audio capture device unavailable.');
+          } else if (code === 'language-not-supported') {
+            this.onStatus?.('Live transcription error: Language en-GB is not supported.');
+          } else {
+            this.onStatus?.(`Live transcription error: (${code}).`);
+          }
+          return;
+        }
+
+        if (code === 'network') {
+          this.onStatus?.('Live transcription error: Network connection to speech service failed — retrying.');
+        } else if (code !== 'no-speech' && code !== 'aborted') {
+          this.onStatus?.(`Live transcription: (${code}) — continuing.`);
+        }
+      };
+
+      this.recognition.onend = () => {
+        this.diagnostics.recognition_end = true;
+        this.notifyDiagnostics();
+        this.handleEnd();
+      };
+
+      this.diagnostics.recognition_start_requested = true;
+      this.notifyDiagnostics();
+      this.onStatus?.('Live transcription: Starting…');
+
       this.recognition.start();
       return true;
     } catch (err: any) {
-      onStatus(`Live transcription could not start (${err?.message ?? err}). Recording continues.`);
+      this.listening = false;
+      this.diagnostics.recognition_error = err?.message || 'start-failed';
+      this.notifyDiagnostics();
+      this.onStatus?.('Live transcription is unavailable in this browser. Audio recording will continue.');
       return false;
     }
   }
@@ -158,10 +302,7 @@ export class LiveTranscriptionService {
    * everything still interim is concatenated into the single replaceable interim string.
    */
   private handleResult(event: any): void {
-    // Once the clinician has ended the assessment the transcript is frozen. Engines can
-    // deliver a straggling final result after stop(); accepting it would silently change a
-    // transcript the clinician has already been shown and submitted.
-    if (this.stopping || !this.listening) return;
+    if (this.intentionalStop || !this.listening) return;
 
     let interim = '';
 
@@ -182,8 +323,6 @@ export class LiveTranscriptionService {
           : null;
       if (confidence !== null) this.sawConfidence = true;
 
-      // Some engines re-emit a final result that was already committed, particularly around
-      // a restart. Committing it twice would duplicate a clinical statement.
       if (this.isDuplicateOfRecent(transcript)) continue;
 
       this.finalEntries.push({
@@ -193,7 +332,6 @@ export class LiveTranscriptionService {
       });
     }
 
-    // Interim is always replaced, never accumulated.
     this.interimText = interim;
     this.emit();
   }
@@ -216,14 +354,14 @@ export class LiveTranscriptionService {
    * a tight restart loop.
    */
   private handleEnd(): void {
-    if (!this.listening || this.stopping || this.fatalError) return;
+    if (!this.listening || this.intentionalStop || this.fatalError) return;
 
     this.restartCount++;
     const backoffMs = Math.min(2000, 150 * Math.pow(2, this.restartAttempts));
     this.restartAttempts++;
 
     setTimeout(() => {
-      if (!this.listening || this.stopping || this.fatalError) return;
+      if (!this.listening || this.intentionalStop || this.fatalError) return;
       try {
         this.recognition.start();
         this.restartAttempts = 0;
@@ -232,8 +370,7 @@ export class LiveTranscriptionService {
           this.fatalError = 'restart-failed';
           this.listening = false;
           this.onStatus?.(
-            'Live transcription could not be restarted. Audio recording is unaffected and the ' +
-              'transcript captured so far has been kept.'
+            'Live transcription is unavailable in this browser. Audio recording will continue.'
           );
         }
       }
@@ -252,7 +389,7 @@ export class LiveTranscriptionService {
    * record would be inventing the one thing the engine declined to assert.
    */
   stop(): { text: string; entries: TranscriptEntry[]; discardedInterim: string } {
-    this.stopping = true;
+    this.intentionalStop = true;
     this.listening = false;
 
     if (this.recognition) {
@@ -291,11 +428,13 @@ export class LiveTranscriptionService {
   getDiagnostics(): RecognitionDiagnostics {
     return {
       supported: LiveTranscriptionService.isSupported(),
+      constructorName: LiveTranscriptionService.getConstructorName(),
       producedAnyText: this.finalEntries.length > 0,
       restartCount: this.restartCount,
       fatalError: this.fatalError,
       confidenceUnavailable: this.finalEntries.length > 0 && !this.sawConfidence,
-      localProcessing: this.localProcessing
+      localProcessing: false,
+      diagnostics: { ...this.diagnostics }
     };
   }
 
@@ -312,6 +451,8 @@ export class LiveTranscriptionService {
     this.restartAttempts = 0;
     this.fatalError = null;
     this.sawConfidence = false;
+    this.intentionalStop = false;
+    this.resetDiagnostics();
   }
 }
 

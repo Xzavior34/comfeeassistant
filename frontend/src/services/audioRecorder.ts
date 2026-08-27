@@ -10,6 +10,12 @@
  * recording is available it gives the clinician a fallback they can listen back to.
  */
 
+export type MediaRecorder = any;
+export type MediaStream = any;
+export type BlobEvent = any;
+declare const MediaRecorder: any;
+declare const navigator: any;
+
 export type RecordingState =
   | 'IDLE'
   | 'REQUESTING_PERMISSION'
@@ -166,19 +172,21 @@ export class ConsultationRecorder {
     this.chunks = [];
     this.accumulatedMs = 0;
 
-    this.recorder.ondataavailable = (e: BlobEvent) => {
-      if (e.data && e.data.size > 0) this.chunks.push(e.data);
-    };
+    if (this.recorder) {
+      this.recorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data && e.data.size > 0) this.chunks.push(e.data);
+      };
 
-    this.recorder.onerror = (e: any) => {
-      this.errors.push(String(e?.error?.name ?? 'recorder error'));
-      // Data captured so far is retained; a mid-session error must not discard it.
-      this.setState('FAILED', 'Audio recording stopped unexpectedly. The transcript is unaffected.');
-    };
+      this.recorder.onerror = (e: any) => {
+        this.errors.push(String(e?.error?.name ?? 'recorder error'));
+        // Data captured so far is retained; a mid-session error must not discard it.
+        this.setState('FAILED', 'Audio recording stopped unexpectedly. The transcript is unaffected.');
+      };
 
-    // A one-second timeslice means an interruption costs at most a second of audio, rather
-    // than the whole consultation sitting unflushed in the recorder.
-    this.recorder.start(1000);
+      // A one-second timeslice means an interruption costs at most a second of audio, rather
+      // than the whole consultation sitting unflushed in the recorder.
+      this.recorder.start(1000);
+    }
     this.startedAt = Date.now();
     this.setState('RECORDING');
     return true;
@@ -261,7 +269,7 @@ export class ConsultationRecorder {
   private releaseStream(): void {
     // Releasing the tracks is what turns the browser's recording indicator off. Leaving them
     // open looks, correctly, like the microphone is still live.
-    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream?.getTracks().forEach((t: any) => t.stop());
     this.stream = null;
   }
 

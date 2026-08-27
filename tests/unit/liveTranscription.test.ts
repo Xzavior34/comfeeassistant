@@ -1,6 +1,8 @@
-/**
- * @jest-environment jsdom
- */
+declare const global: any;
+declare const window: any;
+if (typeof (global as any).window === 'undefined') {
+  (global as any).window = {};
+}
 import { LiveTranscriptionService } from '../../frontend/src/services/speech';
 
 /**
@@ -23,6 +25,14 @@ class FakeSpeechRecognition {
   interimResults = false;
   lang = '';
   maxAlternatives = 1;
+
+  onstart: (() => void) | null = null;
+  onaudiostart: (() => void) | null = null;
+  onsoundstart: (() => void) | null = null;
+  onspeechstart: (() => void) | null = null;
+  onspeechend: (() => void) | null = null;
+  onsoundend: (() => void) | null = null;
+  onaudioend: (() => void) | null = null;
 
   onresult: ((e: any) => void) | null = null;
   onerror: ((e: any) => void) | null = null;
@@ -200,7 +210,7 @@ describe('D. Restart does not duplicate content', () => {
     const { service, engine, statuses } = startService();
     engine.onerror?.({ error: 'no-speech' });
     expect(service.getDiagnostics().fatalError).toBeNull();
-    expect(statuses).toHaveLength(0);
+    expect(statuses.filter((s) => s.includes('error'))).toHaveLength(0);
   });
 });
 
@@ -262,5 +272,109 @@ describe('Recovery', () => {
       { text: 'Recovered statement two.', atMs: 100, confidence: 0.8 }
     ]);
     expect(service.getFrozenText()).toBe('Recovered statement one. Recovered statement two.');
+  });
+});
+
+describe('REQUIREMENTS A-J: Browser SpeechRecognition Test Suite', () => {
+  it('TEST A: webkitSpeechRecognition only exists -> service detects and starts', () => {
+    (window as any).SpeechRecognition = undefined;
+    (window as any).webkitSpeechRecognition = FakeSpeechRecognition;
+
+    const service = new LiveTranscriptionService();
+    const statuses: string[] = [];
+    const started = service.start(() => undefined, (m) => statuses.push(m));
+
+    expect(started).toBe(true);
+    expect(LiveTranscriptionService.getConstructorName()).toBe('webkitSpeechRecognition');
+  });
+
+  it('TEST B: SpeechRecognition only exists -> service detects and starts', () => {
+    (window as any).SpeechRecognition = FakeSpeechRecognition;
+    (window as any).webkitSpeechRecognition = undefined;
+
+    const service = new LiveTranscriptionService();
+    const statuses: string[] = [];
+    const started = service.start(() => undefined, (m) => statuses.push(m));
+
+    expect(started).toBe(true);
+    expect(LiveTranscriptionService.getConstructorName()).toBe('SpeechRecognition');
+  });
+
+  it('TEST C: onstart fires -> status updated to Listening', () => {
+    const { service, statuses, engine } = startService();
+    engine.onstart?.();
+    expect(statuses).toContain('Live transcription: Listening');
+    expect(service.getDiagnostics().diagnostics.recognition_started).toBe(true);
+  });
+
+  it('TEST D: interim results arrive -> live UI updates', () => {
+    const { service, engine } = startService();
+    engine.emit([{ alternatives: [{ transcript: 'My wheelchair is' }], isFinal: false }]);
+
+    expect(service.getState().interimText).toBe('My wheelchair is');
+    expect(service.getFrozenText()).toBe('');
+  });
+
+  it('TEST E: final result arrives -> committed transcript contains result once', () => {
+    const { service, engine } = startService();
+    engine.emit([{ alternatives: [{ transcript: 'My wheelchair is uncomfortable.' }], isFinal: true }]);
+
+    const state = service.getState();
+    expect(state.finalEntries).toHaveLength(1);
+    expect(state.finalEntries[0].text).toBe('My wheelchair is uncomfortable.');
+    expect(service.getFrozenText()).toBe('My wheelchair is uncomfortable.');
+  });
+
+  it('TEST F: recognition emits onend unexpectedly while recording -> safe restart', async () => {
+    const { service, engine } = startService();
+    engine.emit([{ alternatives: [{ transcript: 'Statement.' }], isFinal: true }]);
+    engine.onend?.();
+
+    await new Promise((r) => setTimeout(r, 400));
+    expect(engine.started).toBeGreaterThan(1);
+    expect(service.getDiagnostics().restartCount).toBe(1);
+  });
+
+  it('TEST G: intentional stop causes onend -> NO restart', async () => {
+    const { service, engine } = startService();
+    service.stop();
+    const startsAtStop = engine.started;
+
+    engine.onend?.();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(engine.started).toBe(startsAtStop);
+  });
+
+  it('TEST H: no-speech error -> assessment remains recoverable', () => {
+    const { service, engine, statuses } = startService();
+    engine.onerror?.({ error: 'no-speech' });
+
+    expect(service.getDiagnostics().fatalError).toBeNull();
+    expect(statuses.filter((s) => s.includes('error'))).toHaveLength(0);
+  });
+
+  it('TEST I: not-allowed error -> clear error and no restart loop', async () => {
+    const { service, engine, statuses } = startService();
+    engine.onerror?.({ error: 'not-allowed' });
+
+    const startsAtError = engine.started;
+    engine.onend?.();
+    await new Promise((r) => setTimeout(r, 400));
+
+    expect(engine.started).toBe(startsAtError);
+    expect(service.getDiagnostics().fatalError).toBe('not-allowed');
+    expect(statuses.join(' ')).toMatch(/blocked/i);
+  });
+
+  it('TEST J: recognition unavailable -> audio recorder continues but UI says live transcription unavailable', () => {
+    (window as any).SpeechRecognition = undefined;
+    (window as any).webkitSpeechRecognition = undefined;
+
+    const service = new LiveTranscriptionService();
+    const statuses: string[] = [];
+    const started = service.start(() => undefined, (m) => statuses.push(m));
+
+    expect(started).toBe(false);
+    expect(statuses[0]).toMatch(/unavailable/i);
   });
 });

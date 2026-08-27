@@ -514,6 +514,7 @@ function App() {
               showing nothing.
             */}
             <div className="transcriptStream scrollBox">
+              <h3 style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b', margin: '0 0 8px 0' }}>LIVE TRANSCRIPT</h3>
               {liveText ? (
                 <p>
                   {transcript.finalEntries.map((e) => e.text).join(' ')}
