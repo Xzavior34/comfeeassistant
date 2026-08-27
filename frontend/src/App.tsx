@@ -67,6 +67,7 @@ function App() {
 
   // Guards double submission of End Assessment, which would create two jobs.
   const endingRef = useRef(false);
+  const [speechDiagnostics, setSpeechDiagnostics] = useState<any>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -142,15 +143,18 @@ function App() {
     setTimerSeconds(0);
     endingRef.current = false;
 
-    // Audio capture is optional and independent: if it fails, the assessment still runs on
-    // the device transcript.
+    let recorderStartMs: number | null = null;
+
     if (ConsultationRecorder.isSupported()) {
       consultationRecorder.onStateChange((state, detail) => {
         setRecorderState(state);
         if (detail) setStatusMessage(detail);
       });
       const prepared = await consultationRecorder.prepare();
-      if (prepared) consultationRecorder.start();
+      if (prepared) {
+        consultationRecorder.start();
+        recorderStartMs = Date.now();
+      }
     } else {
       setStatusMessage('This browser cannot record audio. The assessment will use live transcription only.');
     }
@@ -166,7 +170,13 @@ function App() {
           wasRecordingAudio: consultationRecorder.getState() === 'RECORDING'
         });
       },
-      (message) => setStatusMessage(message)
+      (message) => setStatusMessage(message),
+      (diag) => {
+        setSpeechDiagnostics({
+          ...diag,
+          mediaRecorderStartTimeMs: recorderStartMs
+        });
+      }
     );
 
     if (!started) setTranscriptionAvailable(false);
@@ -542,6 +552,47 @@ function App() {
                   End assessment
                 </button>
               )}
+            </div>
+
+            {/* TEMPORARY PRODUCTION DIAGNOSTICS PANEL */}
+            <div
+              style={{
+                marginTop: 20,
+                padding: 16,
+                background: '#0f172a',
+                border: '1px solid #334155',
+                borderRadius: 8,
+                fontSize: '12px',
+                fontFamily: 'monospace',
+                color: '#cbd5e1',
+                textAlign: 'left'
+              }}
+            >
+              <h4 style={{ margin: '0 0 10px 0', color: '#38bdf8', fontSize: '13px', fontFamily: 'sans-serif' }}>
+                🔍 WEB SPEECH DIAGNOSTICS (PRODUCTION VERIFICATION PANEL)
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 16px', marginBottom: 12 }}>
+                <div><strong>Recognition API:</strong> <span style={{ color: '#f59e0b' }}>{speechDiagnostics?.api ?? 'unavailable'}</span></div>
+                <div><strong>Recognition State:</strong> <span style={{ color: '#f59e0b' }}>{speechDiagnostics?.state ?? 'idle'}</span></div>
+                <div><strong>Last Error Code:</strong> <span style={{ color: speechDiagnostics?.lastErrorCode && speechDiagnostics.lastErrorCode !== 'none' ? '#ef4444' : '#10b981' }}>{speechDiagnostics?.lastErrorCode ?? 'none'}</span></div>
+                <div><strong>MediaRecorder Start:</strong> {speechDiagnostics?.mediaRecorderStartTimeMs ? `${speechDiagnostics.mediaRecorderStartTimeMs} ms` : 'none'}</div>
+                <div><strong>Speech Start Requested:</strong> {speechDiagnostics?.speechStartRequestedTimeMs ? `${speechDiagnostics.speechStartRequestedTimeMs} ms` : 'none'}</div>
+                <div><strong>Speech onstart Event:</strong> {speechDiagnostics?.speechOnStartTimeMs ? `${speechDiagnostics.speechOnStartTimeMs} ms` : 'none'}</div>
+              </div>
+
+              <h5 style={{ margin: '8px 0 4px 0', color: '#94a3b8', fontSize: '11px', fontFamily: 'sans-serif' }}>EVENT COUNTERS</h5>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px' }}>
+                <div>startAttempts: <strong>{speechDiagnostics?.counters?.startAttempts ?? 0}</strong></div>
+                <div>onstart: <strong>{speechDiagnostics?.counters?.onstartEvents ?? 0}</strong></div>
+                <div>onaudiostart: <strong>{speechDiagnostics?.counters?.onaudiostartEvents ?? 0}</strong></div>
+                <div>onsoundstart: <strong>{speechDiagnostics?.counters?.onsoundstartEvents ?? 0}</strong></div>
+                <div>onspeechstart: <strong>{speechDiagnostics?.counters?.onspeechstartEvents ?? 0}</strong></div>
+                <div>onresult: <strong>{speechDiagnostics?.counters?.onresultEvents ?? 0}</strong></div>
+                <div>finalResults: <strong>{speechDiagnostics?.counters?.finalResults ?? 0}</strong></div>
+                <div>interimResults: <strong>{speechDiagnostics?.counters?.interimResults ?? 0}</strong></div>
+                <div>onend: <strong>{speechDiagnostics?.counters?.onendEvents ?? 0}</strong></div>
+                <div>restartAttempts: <strong>{speechDiagnostics?.counters?.restartAttempts ?? 0}</strong></div>
+              </div>
             </div>
           </div>
         )}

@@ -37,7 +37,26 @@ export interface LiveTranscriptState {
   interimText: string;
 }
 
+export interface DiagnosticCounters {
+  startAttempts: number;
+  onstartEvents: number;
+  onaudiostartEvents: number;
+  onsoundstartEvents: number;
+  onspeechstartEvents: number;
+  onresultEvents: number;
+  finalResults: number;
+  interimResults: number;
+  onendEvents: number;
+  restartAttempts: number;
+}
+
 export interface DiagnosticState {
+  api: 'SpeechRecognition' | 'webkitSpeechRecognition' | 'unavailable' | 'neither';
+  state: 'idle' | 'start requested' | 'started' | 'audio detected' | 'sound detected' | 'speech detected' | 'result received' | 'ended' | 'error';
+  lastErrorCode: string;
+  counters: DiagnosticCounters;
+  speechStartRequestedTimeMs: number | null;
+  speechOnStartTimeMs: number | null;
   recognition_available: boolean;
   recognition_created: boolean;
   recognition_start_requested: boolean;
@@ -108,7 +127,24 @@ export class LiveTranscriptionService {
   private sawConfidence = false;
 
   private diagnostics: DiagnosticState = {
-    recognition_available: false,
+    api: getConstructorName() === 'neither' ? 'unavailable' : getConstructorName(),
+    state: 'idle',
+    lastErrorCode: 'none',
+    counters: {
+      startAttempts: 0,
+      onstartEvents: 0,
+      onaudiostartEvents: 0,
+      onsoundstartEvents: 0,
+      onspeechstartEvents: 0,
+      onresultEvents: 0,
+      finalResults: 0,
+      interimResults: 0,
+      onendEvents: 0,
+      restartAttempts: 0
+    },
+    speechStartRequestedTimeMs: null,
+    speechOnStartTimeMs: null,
+    recognition_available: LiveTranscriptionService.isSupported(),
     recognition_created: false,
     recognition_start_requested: false,
     recognition_started: false,
@@ -136,7 +172,25 @@ export class LiveTranscriptionService {
   }
 
   private resetDiagnostics(): void {
+    const ctorName = getConstructorName();
     this.diagnostics = {
+      api: ctorName === 'neither' ? 'unavailable' : ctorName,
+      state: 'idle',
+      lastErrorCode: 'none',
+      counters: {
+        startAttempts: 0,
+        onstartEvents: 0,
+        onaudiostartEvents: 0,
+        onsoundstartEvents: 0,
+        onspeechstartEvents: 0,
+        onresultEvents: 0,
+        finalResults: 0,
+        interimResults: 0,
+        onendEvents: 0,
+        restartAttempts: 0
+      },
+      speechStartRequestedTimeMs: null,
+      speechOnStartTimeMs: null,
       recognition_available: LiveTranscriptionService.isSupported(),
       recognition_created: false,
       recognition_start_requested: false,
@@ -155,16 +209,15 @@ export class LiveTranscriptionService {
 
   private notifyDiagnostics(): void {
     if (this.onDiagnostics) {
-      this.onDiagnostics({ ...this.diagnostics });
+      this.onDiagnostics({
+        ...this.diagnostics,
+        counters: { ...this.diagnostics.counters }
+      });
     }
   }
 
   /**
    * Starts live recognition.
-   *
-   * Resolves as soon as recognition has been requested. It never throws for an unsupported
-   * browser: the assessment must still be recordable, and the caller is told through
-   * onStatus so it can show "Live transcription is unavailable in this browser".
    */
   start(
     onUpdate: (state: LiveTranscriptState) => void,
@@ -172,9 +225,12 @@ export class LiveTranscriptionService {
     onDiagnostics?: (diag: DiagnosticState) => void
   ): boolean {
     const Ctor = getRecognitionConstructor();
+    const ctorName = getConstructorName();
     this.onUpdate = onUpdate;
     this.onStatus = onStatus;
     this.onDiagnostics = onDiagnostics || null;
+
+    console.log(`[speech] constructor=${ctorName}`);
 
     this.resetDiagnostics();
 
@@ -193,8 +249,6 @@ export class LiveTranscriptionService {
       this.recognition.lang = 'en-GB';
       this.recognition.maxAlternatives = 1;
 
-      // Note: We do NOT force processLocally = true because Chrome desktop requires standard network speech recognition.
-
       this.sessionStartMs = Date.now();
       this.listening = true;
       this.intentionalStop = false;
@@ -203,50 +257,73 @@ export class LiveTranscriptionService {
 
       // Attach ALL event handlers BEFORE start()
       this.recognition.onstart = () => {
+        console.log('[speech] onstart');
+        this.diagnostics.state = 'started';
         this.diagnostics.recognition_started = true;
+        this.diagnostics.counters.onstartEvents++;
+        this.diagnostics.speechOnStartTimeMs = Date.now();
         this.notifyDiagnostics();
         this.onStatus?.('Live transcription: Listening');
       };
 
       this.recognition.onaudiostart = () => {
+        console.log('[speech] onaudiostart');
+        this.diagnostics.state = 'audio detected';
         this.diagnostics.audio_start = true;
+        this.diagnostics.counters.onaudiostartEvents++;
         this.notifyDiagnostics();
       };
 
       this.recognition.onsoundstart = () => {
+        console.log('[speech] onsoundstart');
+        this.diagnostics.state = 'sound detected';
         this.diagnostics.sound_start = true;
+        this.diagnostics.counters.onsoundstartEvents++;
         this.notifyDiagnostics();
       };
 
       this.recognition.onspeechstart = () => {
+        console.log('[speech] onspeechstart');
+        this.diagnostics.state = 'speech detected';
         this.diagnostics.speech_start = true;
+        this.diagnostics.counters.onspeechstartEvents++;
         this.notifyDiagnostics();
         this.onStatus?.('Live transcription: Speech detected');
       };
 
       this.recognition.onspeechend = () => {
+        console.log('[speech] onspeechend');
         this.diagnostics.speech_end = true;
         this.notifyDiagnostics();
       };
 
       this.recognition.onsoundend = () => {
+        console.log('[speech] onsoundend');
         this.diagnostics.sound_end = true;
         this.notifyDiagnostics();
       };
 
       this.recognition.onaudioend = () => {
+        console.log('[speech] onaudioend');
         this.diagnostics.audio_end = true;
         this.notifyDiagnostics();
       };
 
       this.recognition.onresult = (event: any) => {
+        const hasFinal = Array.from(event.results || []).some((r: any) => r.isFinal);
+        console.log(`[speech] onresult interim=${!hasFinal}`);
+        this.diagnostics.state = 'result received';
         this.diagnostics.result_received = true;
+        this.diagnostics.counters.onresultEvents++;
         this.notifyDiagnostics();
         this.handleResult(event);
       };
 
       this.recognition.onerror = (event: any) => {
         const code = String(event?.error ?? 'unknown');
+        console.log(`[speech] onerror code=${code}`);
+        this.diagnostics.state = 'error';
+        this.diagnostics.lastErrorCode = code;
         this.diagnostics.recognition_error = code;
         this.notifyDiagnostics();
 
@@ -275,19 +352,29 @@ export class LiveTranscriptionService {
       };
 
       this.recognition.onend = () => {
+        console.log('[speech] onend');
+        this.diagnostics.state = 'ended';
         this.diagnostics.recognition_end = true;
+        this.diagnostics.counters.onendEvents++;
         this.notifyDiagnostics();
         this.handleEnd();
       };
 
+      console.log('[speech] start requested');
+      this.diagnostics.state = 'start requested';
       this.diagnostics.recognition_start_requested = true;
+      this.diagnostics.counters.startAttempts++;
+      this.diagnostics.speechStartRequestedTimeMs = Date.now();
       this.notifyDiagnostics();
       this.onStatus?.('Live transcription: Starting…');
 
       this.recognition.start();
       return true;
     } catch (err: any) {
+      console.log(`[speech] onerror code=${err?.message || 'start-failed'}`);
       this.listening = false;
+      this.diagnostics.state = 'error';
+      this.diagnostics.lastErrorCode = err?.message || 'start-failed';
       this.diagnostics.recognition_error = err?.message || 'start-failed';
       this.notifyDiagnostics();
       this.onStatus?.('Live transcription is unavailable in this browser. Audio recording will continue.');
@@ -297,9 +384,6 @@ export class LiveTranscriptionService {
 
   /**
    * Handles a recognition event.
-   *
-   * The event carries results from `resultIndex` onward. Final results are appended once;
-   * everything still interim is concatenated into the single replaceable interim string.
    */
   private handleResult(event: any): void {
     if (this.intentionalStop || !this.listening) return;
@@ -314,9 +398,11 @@ export class LiveTranscriptionService {
 
       if (!result.isFinal) {
         interim += (interim ? ' ' : '') + transcript;
+        this.diagnostics.counters.interimResults++;
         continue;
       }
 
+      this.diagnostics.counters.finalResults++;
       const confidence =
         typeof alternative.confidence === 'number' && alternative.confidence > 0
           ? alternative.confidence
@@ -333,6 +419,7 @@ export class LiveTranscriptionService {
     }
 
     this.interimText = interim;
+    this.notifyDiagnostics();
     this.emit();
   }
 
@@ -359,10 +446,16 @@ export class LiveTranscriptionService {
     this.restartCount++;
     const backoffMs = Math.min(2000, 150 * Math.pow(2, this.restartAttempts));
     this.restartAttempts++;
+    this.diagnostics.counters.restartAttempts++;
+    this.notifyDiagnostics();
 
     setTimeout(() => {
       if (!this.listening || this.intentionalStop || this.fatalError) return;
       try {
+        console.log('[speech] restart requested');
+        this.diagnostics.state = 'start requested';
+        this.diagnostics.counters.startAttempts++;
+        this.notifyDiagnostics();
         this.recognition.start();
         this.restartAttempts = 0;
       } catch {
