@@ -12,18 +12,28 @@ router.use(authenticateToken);
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userOrgId = req.user!.organisationId;
-    
-    // Stale processing recovery: if a meeting is stuck in EXTRACTION_RUNNING or TRANSCRIBING
-    // for over 5 minutes (e.g. server crash or restart), transition to FAILED so the clinician can retry.
-    const staleThreshold = new Date(Date.now() - 5 * 60 * 1000);
-    await prisma.meeting.updateMany({
-      where: {
-        organisationId: userOrgId,
-        status: { in: [MeetingState.EXTRACTION_RUNNING, MeetingState.TRANSCRIBING, MeetingState.UPLOADING] },
-        createdAt: { lt: staleThreshold }
-      },
-      data: { status: MeetingState.FAILED }
-    });
+
+    // Stale-processing recovery, contributed by the parallel implementation and kept here.
+    // On free hosting the web service can be stopped mid-job, which would otherwise leave a
+    // meeting showing "generating" forever. Marking it FAILED is what surfaces the Retry
+    // action; the frozen transcript is untouched, so retrying costs nothing but a rerun.
+    const staleThreshold = new Date(Date.now() - 10 * 60 * 1000);
+    await prisma.meeting
+      .updateMany({
+        where: {
+          organisationId: userOrgId,
+          status: {
+            in: [
+              MeetingState.EXTRACTION_RUNNING,
+              MeetingState.TRANSCRIBING,
+              MeetingState.UPLOADING
+            ]
+          },
+          createdAt: { lt: staleThreshold }
+        },
+        data: { status: MeetingState.FAILED }
+      })
+      .catch(() => undefined);
 
     const meetings = await prisma.meeting.findMany({
       where: { organisationId: userOrgId }

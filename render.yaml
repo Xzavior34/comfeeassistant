@@ -1,29 +1,24 @@
-## Render blueprint for the Vabatim API and background worker.
+## Render blueprint — Vabatim free-tier MVP.
 ##
-## Values marked `sync: false` are secrets: Render prompts for them on first deploy and
-## never stores them in this file. Do not replace them with literal values.
+## One web service and one database. No background worker and no Redis: transcription
+## happens on the clinician's device and the documentation pipeline runs inside the web
+## service, with job state persisted in Postgres so a refresh or a restart does not lose a
+## consultation.
 ##
-## Both services must receive the same environment. The worker performs transcription and
-## note generation, so a variable set only on the web service leaves the worker broken in a
-## way that is invisible until a recording is processed.
+## A dedicated worker is not free on Render, so requiring one would have made the MVP
+## impossible to run at zero cost. The queue interfaces remain in the codebase; setting
+## PROCESSING_MODE=queue and adding a worker service is a later, paid decision — nothing
+## needs rewriting for it.
+##
+## Values marked `sync: false` are secrets. Render prompts for them on first deploy and does
+## not store them in this file. Do not replace them with literal values.
 
 services:
-  # ---------------------------------------------------------------- Redis
-  # BullMQ job queue. Without it the API still accepts recordings, but reports them as
-  # PENDING and nothing transcribes them.
-  - type: redis
-    name: vabatim-redis
-    region: frankfurt
-    plan: starter
-    maxmemoryPolicy: noeviction # never silently drop a queued clinical job
-    ipAllowList: [] # private network only
-
-  # ---------------------------------------------------------------- API
   - type: web
     name: vabatim-api
     env: node
     region: frankfurt # closest EU region to the UK
-    plan: starter # free tier sleeps, which drops queued jobs
+    plan: free
     healthCheckPath: /health
     buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
@@ -34,46 +29,50 @@ services:
         value: 10000
 
       # --- Security -------------------------------------------------------
-      # Startup now fails if this is absent or shorter than 32 characters.
+      # The API refuses to start if this is missing or shorter than 32 characters.
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRES_IN
         value: 24h
+      # Comma-separated list of browser origins allowed to call this API directly. Requests
+      # proxied through the Vercel rewrite are same-origin and do not need it, but setting it
+      # makes direct calls work too.
+      - key: CORS_ORIGIN
+        sync: false
 
       # --- Data -----------------------------------------------------------
       - key: DATABASE_URL
         fromDatabase:
           name: vabatim-db
           property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: vabatim-redis
-          property: connectionString
+
+      # --- Processing -----------------------------------------------------
+      # inline: the web service runs documentation generation itself. No queue, no worker,
+      # no Redis. Job state lives in Postgres so progress survives a refresh.
+      - key: PROCESSING_MODE
+        value: inline
 
       # --- Speech ---------------------------------------------------------
-      # 'device' cannot separate speakers or bias toward clinical vocabulary.
-      # Use 'azure' (UK South keeps audio in-region) or 'google' for a clinical deployment.
+      # device: recognition runs in the clinician's browser at no cost. The server receives
+      # text only. Paid cloud providers remain available as optional adapters and are not
+      # required by anything.
       - key: SPEECH_PROVIDER
-        value: azure
+        value: device
       - key: SPEECH_LANGUAGE
         value: en-GB
-      - key: AZURE_SPEECH_KEY
-        sync: false
-      - key: AZURE_SPEECH_REGION
-        value: uksouth
-      # Only needed if SPEECH_PROVIDER=google.
-      - key: GOOGLE_SPEECH_API_KEY
-        sync: false
+      # Speaker diarisation is off. The system does not guess who spoke, and says so in the
+      # note rather than inventing labels.
+      - key: DIARIZATION_PROVIDER
+        value: none
 
       # --- Language model -------------------------------------------------
       - key: LLM_PROVIDER
         value: gemini
       - key: GEMINI_API_KEY
         sync: false
-      # GEMINI_MODEL is intentionally unset. The provider queries ListModels and resolves a
-      # model this key can actually serve. Pin one here only after confirming availability;
-      # a stale pin is what took the previous deployment down.
+      # GEMINI_MODEL is intentionally unset. The server asks the API which models the key can
+      # serve and picks one. Pinning a model is what broke the previous deployment when that
+      # model was retired.
 
       # --- Storage --------------------------------------------------------
       - key: STORAGE_PROVIDER
@@ -85,67 +84,26 @@ services:
       - key: SUPABASE_BUCKET_NAME
         value: vabatim-clinical-storage
 
+      # --- Retention ------------------------------------------------------
+      # Audio is not stored by default: the transcript is the clinical artefact, and not
+      # keeping the recording is the smallest data footprint that still does the job. These
+      # are organisational policy decisions, not legal constants.
+      - key: STORE_AUDIO
+        value: 'false'
+      - key: AUDIO_RETENTION_HOURS
+        value: '24'
+      - key: TRANSCRIPT_RETENTION_DAYS
+        value: '30'
+
       # --- App ------------------------------------------------------------
       - key: APP_BASE_URL
-        sync: false # your Vercel URL, e.g. https://vabatim.vercel.app
+        sync: false # your Vercel URL, e.g. https://comfeeassistant.vercel.app
       - key: EMAIL_PROVIDER
         value: mock
-
-  # ---------------------------------------------------------------- Worker
-  # Transcription of a full consultation takes minutes, so it runs here rather than in an
-  # HTTP request. Without this service, recordings upload and are never processed.
-  - type: worker
-    name: vabatim-worker
-    env: node
-    region: frankfurt
-    plan: starter
-    buildCommand: npm install --include=dev && npm run build
-    startCommand: npm run worker
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: JWT_SECRET
-        fromService:
-          type: web
-          name: vabatim-api
-          envVarKey: JWT_SECRET
-      - key: DATABASE_URL
-        fromDatabase:
-          name: vabatim-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: vabatim-redis
-          property: connectionString
-      - key: SPEECH_PROVIDER
-        value: azure
-      - key: SPEECH_LANGUAGE
-        value: en-GB
-      - key: AZURE_SPEECH_KEY
-        sync: false
-      - key: AZURE_SPEECH_REGION
-        value: uksouth
-      - key: GOOGLE_SPEECH_API_KEY
-        sync: false
-      - key: LLM_PROVIDER
-        value: gemini
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: STORAGE_PROVIDER
-        value: supabase
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: SUPABASE_BUCKET_NAME
-        value: vabatim-clinical-storage
-      - key: APP_BASE_URL
-        sync: false
 
 databases:
   - name: vabatim-db
     databaseName: vabatim
     user: vabatim
     region: frankfurt
-    plan: basic-256mb
+    plan: free

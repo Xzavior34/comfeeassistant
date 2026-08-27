@@ -39,20 +39,16 @@ describe('Controlled Seating Assessment End-to-End Pipeline Audit', () => {
     // 4. RECORDING & UPLOAD & ASYNC PIPELINE TRIGGER
     performanceTracker.startTracking(meetingId, 45000);
     const uploadRes = await request(app)
-      .post('/api/recordings/upload')
+      .post(`/api/recordings/upload?meetingId=${meetingId}`)
       .set('Authorization', `Bearer ${token}`)
-      .send({
-        meetingId,
-        audioBase64: Buffer.alloc(2048, 1).toString('base64'),
-        mimeType: 'audio/wav',
-        durationMs: 45000
-      });
+      .set('Content-Type', 'audio/wav')
+      .send(Buffer.alloc(2048, 1));
 
     expect(uploadRes.status).toBe(200);
-    expect(uploadRes.body.recording.storageKey).toContain(meetingId);
-    // Transcription is asynchronous: the upload reports the recording as accepted for
-    // processing, never as already complete.
-    expect(['QUEUED', 'PENDING']).toContain(uploadRes.body.recording.processingStatus);
+    // Audio retention is off by default, so the recording is honestly reported as not
+    // stored rather than the endpoint pretending it kept it.
+    expect(uploadRes.body.stored).toBe(false);
+    expect(uploadRes.body.message).toMatch(/retention is disabled/i);
     performanceTracker.recordPhase(meetingId, 'speechProcessingDurationMs', 150);
     performanceTracker.recordPhase(meetingId, 'aiExtractionDurationMs', 80);
 
@@ -64,22 +60,30 @@ describe('Controlled Seating Assessment End-to-End Pipeline Audit', () => {
     expect(transcriptRes.status).toBe(200);
     // expect(transcriptRes.body.segments.length).toBeGreaterThan(0);
 
-    // 7. CLINICIAN APPROVAL
+    // 6. SUBMIT THE FROZEN TRANSCRIPT. Free mode sends text; generation is asynchronous.
+    const processRes = await request(app)
+      .post('/api/transcripts/process')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        meetingId,
+        transcriptText:
+          'Seat width is forty four centimetres in supported sitting. There is a left pelvic ' +
+          'obliquity of about fifteen degrees that corrects on support.'
+      });
+
+    expect(processRes.status).toBe(202);
+    expect(processRes.body.jobId).toBeDefined();
+
+    // 7. CLINICIAN APPROVAL is refused while no note has been generated. In this environment
+    // the clinical model is unavailable, so generation cannot have produced one — and a note
+    // that does not exist must not be approvable. The previous implementation approved the
+    // meeting regardless and returned a hardcoded note hash.
     const approveRes = await request(app)
       .post(`/api/reviews/approve`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ meetingId, approvedBy: 'Dr. Sarah Jenkins' });
+      .send({ meetingId, approvedBy: 'Dr. Sarah Jenkins', attested: true });
 
-    expect(approveRes.status).toBe(200);
-
-    // 8. SECURE DOCUMENT DELIVERY
-    const deliveryRes = await request(app)
-      .post(`/api/documents/deliver/${meetingId}`)
-      .set('Authorization', `Bearer ${token}`)
-      .send({ recipientEmail: 'specialist@nhs.uk' });
-
-    expect(deliveryRes.status).toBe(200);
-    expect(deliveryRes.body.signedUrl).toBeDefined();
+    expect(approveRes.status).toBe(404);
 
     // 9. AUDIT TRAIL VERIFICATION
     const auditRes = await request(app)

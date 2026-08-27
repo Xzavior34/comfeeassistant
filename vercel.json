@@ -8,11 +8,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://comfeeassistant.onrender.com/api/:path*"
+      "destination": "https://REPLACE-WITH-YOUR-RENDER-API.onrender.com/api/:path*"
     },
     {
       "source": "/health",
-      "destination": "https://comfeeassistant.onrender.com/health"
+      "destination": "https://REPLACE-WITH-YOUR-RENDER-API.onrender.com/health"
     },
     {
       "source": "/((?!assets|api|health|sw.js|workbox-.*|manifest.webmanifest|favicon.ico|.*\\.png).*)",

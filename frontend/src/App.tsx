@@ -1,7 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { API_BASE_URL, checkApiHealth, loginClinician, createMeeting, recordConsent, submitTranscriptAndProcess, approveReview, uploadRecording } from './services/api';
-import { deviceSpeech, SpeechSegment } from './services/speech';
-import { consultationRecorder, ConsultationAudioRecorder } from './services/audioRecorder';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  API_BASE_URL,
+  checkApiHealth,
+  loginClinician,
+  createMeeting,
+  recordConsent,
+  submitTranscript,
+  getJobStatus,
+  retryDocumentation,
+  getReviewDraft,
+  saveReviewEdits,
+  approveReview,
+  JobStatus
+} from './services/api';
+import { liveTranscription, LiveTranscriptState, TranscriptEntry } from './services/speech';
+import { consultationRecorder, ConsultationRecorder, RecordingState } from './services/audioRecorder';
+import { sessionCheckpoint, pendingUpload } from './services/sessionCheckpoint';
 import { MetricsDashboard } from './components/MetricsDashboard';
 import './App.css';
 
@@ -9,67 +23,106 @@ type Screen = 'LOGIN' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'R
 type TemplateType = 'INITIAL_ASSESSMENT' | 'REVIEW';
 type SessionFormat = 'FACE_TO_FACE' | 'VIRTUAL';
 
-function App() {
-  const [screen, setScreen] = useState<Screen>(localStorage.getItem('comfee_auth_token') ? 'MEETINGS' : 'LOGIN');
-  const [apiHealth, setApiHealth] = useState<any>(null);
-  
-  // Auth State
-  const [clinicianEmail, setClinicianEmail] = useState<string>('');
-  const [clinicianPassword, setClinicianPassword] = useState<string>('');
+interface NarrativeEntry {
+  text: string;
+  requiresReview: boolean;
+  fieldId: string;
+}
+interface NarrativeSection {
+  id: string;
+  title: string;
+  entries: NarrativeEntry[];
+  notEstablished?: string;
+}
 
-  // Meeting State
-  const [clientRef, setClientRef] = useState<string>('');
+function App() {
+  const [screen, setScreen] = useState<Screen>(
+    localStorage.getItem('comfee_auth_token') ? 'MEETINGS' : 'LOGIN'
+  );
+  const [apiHealth, setApiHealth] = useState<any>(null);
+
+  const [clinicianEmail, setClinicianEmail] = useState('');
+  const [clinicianPassword, setClinicianPassword] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  const [clientRef, setClientRef] = useState('');
   const [templateType, setTemplateType] = useState<TemplateType>('INITIAL_ASSESSMENT');
   const [sessionFormat, setSessionFormat] = useState<SessionFormat>('FACE_TO_FACE');
-  const [meetingId, setMeetingId] = useState<string>('');
-  
-  // Recording State
+  const [meetingId, setMeetingId] = useState('');
+
   const [isListening, setIsListening] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(0);
-  const [interimText, setInterimText] = useState('');
-  const [segments, setSegments] = useState<SpeechSegment[]>([]);
-  const [speechError, setSpeechError] = useState<string | null>(null);
-  const [isSpeechSupported, setIsSpeechSupported] = useState(true);
-  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
-  const [processingNote, setProcessingNote] = useState<string>('');
+  const [transcript, setTranscript] = useState<LiveTranscriptState>({ finalEntries: [], interimText: '' });
+  const [recorderState, setRecorderState] = useState<RecordingState>('IDLE');
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [transcriptionAvailable, setTranscriptionAvailable] = useState(true);
 
-  // Result State
-  const [extractionResult, setExtractionResult] = useState<any>(null);
-  const [downloadLinks, setDownloadLinks] = useState<{pdfUrl: string, docxUrl: string} | null>(null);
+  const [job, setJob] = useState<JobStatus | null>(null);
+  const [draft, setDraft] = useState<any>(null);
+  const [sections, setSections] = useState<NarrativeSection[]>([]);
+  const [savingEdits, setSavingEdits] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [noteId, setNoteId] = useState<string>('');
+  const [recovery, setRecovery] = useState<{ meetingId: string; entries: TranscriptEntry[] } | null>(null);
+
+  // Guards double submission of End Assessment, which would create two jobs.
+  const endingRef = useRef(false);
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    checkApiHealth().then(setApiHealth).catch(() => {});
-    setIsSpeechSupported(deviceSpeech.isSupported());
+    checkApiHealth().then(setApiHealth).catch(() => undefined);
+    setTranscriptionAvailable(
+      typeof window !== 'undefined' &&
+        Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+    );
+
+    // Offer recovery if a previous session was interrupted.
+    void sessionCheckpoint.loadLatest().then((cp) => {
+      if (cp && cp.entries.length > 0) setRecovery({ meetingId: cp.meetingId, entries: cp.entries });
+    });
   }, []);
 
   useEffect(() => {
-    let interval: any;
-    if (isListening) {
-      interval = setInterval(() => setTimerSeconds((prev: number) => prev + 1), 1000);
-    }
+    if (!isListening) return;
+    const interval = setInterval(() => setTimerSeconds((s) => s + 1), 1000);
     return () => clearInterval(interval);
   }, [isListening]);
 
+  // Backgrounding a tab on mobile commonly suspends capture. Recorded so the clinician is
+  // told, rather than discovering a gap in the transcript later.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden && isListening) consultationRecorder.noteInterruption();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [isListening]);
+
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [transcript]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loggingIn) return;
+    setLoggingIn(true);
     try {
       await loginClinician(clinicianEmail, clinicianPassword);
       setScreen('MEETINGS');
     } catch (err: any) {
-      console.error('Login Error:', err);
-      alert(`Login failed: ${err.message || 'Unknown error'}`);
+      alert(`Sign in failed: ${err.message}`);
+    } finally {
+      setLoggingIn(false);
     }
   };
 
   const handleCreateMeeting = async () => {
     try {
-      const data = await createMeeting(clientRef || 'Anonymous-Client', templateType, sessionFormat);
-      const actualMeeting = data.meeting || data;
-      setMeetingId(actualMeeting.id || `meeting-${Date.now()}`);
+      const data = await createMeeting(clientRef || 'Unspecified', templateType, sessionFormat);
+      setMeetingId((data.meeting || data).id);
       setScreen('CONSENT');
     } catch (err: any) {
-      console.error('Meeting Error:', err);
-      alert(`Meeting creation failed: ${err.message || 'Server error'}`);
+      alert(`Could not create the session: ${err.message}`);
     }
   };
 
@@ -78,133 +131,227 @@ function App() {
       await recordConsent(meetingId, true);
       setScreen('RECORDING');
     } catch (err: any) {
-      console.error('Consent Error:', err);
-      alert(`Consent recording failed: ${err.message || 'Server error'}`);
+      alert(`Consent could not be recorded: ${err.message}`);
     }
   };
 
-  const handleStartRecording = async () => {
-    setSpeechError(null);
-    const permitted = await deviceSpeech.requestMicrophonePermission();
-    if (!permitted && !deviceSpeech.isSupported()) {
-      setSpeechError('W3C SpeechRecognition is not available on this browser/device.');
-    }
-
-    // Record the consultation as well as running live recognition. Browser recognition
-    // gives the clinician immediate on-screen text but cannot separate speakers; the
-    // recording is what the diarising cloud recogniser transcribes into the actual record.
-    if (ConsultationAudioRecorder.isSupported()) {
-      try {
-        await consultationRecorder.start();
-        setIsRecordingAudio(true);
-      } catch (err: any) {
-        setIsRecordingAudio(false);
-        setSpeechError(
-          `Audio recording unavailable (${err?.message ?? err}). The session will continue, but ` +
-            'speakers cannot be identified and statements will be recorded as unattributed.'
-        );
-      }
-    } else {
-      setSpeechError(
-        'This browser cannot record audio, so speakers cannot be identified. Statements will be ' +
-          'recorded as unattributed.'
-      );
-    }
-
-    setIsListening(true);
+  const handleStart = async () => {
+    setStatusMessage(null);
+    liveTranscription.reset();
+    setTranscript({ finalEntries: [], interimText: '' });
     setTimerSeconds(0);
-    setSegments([]);
+    endingRef.current = false;
 
-    deviceSpeech.start(
-      (interim: string) => setInterimText(interim),
-      (newSegment: SpeechSegment) => setSegments((prev: SpeechSegment[]) => [...prev, newSegment]),
-      (err: string) => setSpeechError(err)
+    // Audio capture is optional and independent: if it fails, the assessment still runs on
+    // the device transcript.
+    if (ConsultationRecorder.isSupported()) {
+      consultationRecorder.onStateChange((state, detail) => {
+        setRecorderState(state);
+        if (detail) setStatusMessage(detail);
+      });
+      const prepared = await consultationRecorder.prepare();
+      if (prepared) consultationRecorder.start();
+    } else {
+      setStatusMessage('This browser cannot record audio. The assessment will use live transcription only.');
+    }
+
+    const started = liveTranscription.start(
+      (state) => {
+        setTranscript(state);
+        void sessionCheckpoint.save({
+          meetingId,
+          clientRef,
+          entries: state.finalEntries,
+          startedAtIso: new Date().toISOString(),
+          wasRecordingAudio: consultationRecorder.getState() === 'RECORDING'
+        });
+      },
+      (message) => setStatusMessage(message)
+    );
+
+    if (!started) setTranscriptionAvailable(false);
+    setIsListening(true);
+  };
+
+  /**
+   * End Assessment.
+   *
+   * Order matters: stop recognition and let it settle, stop the recorder and wait for its
+   * final data, freeze the transcript, checkpoint it, and only then submit. Tearing the
+   * objects down first is how the last sentence of a consultation goes missing.
+   */
+  const handleEndAssessment = async () => {
+    if (endingRef.current) return;
+    endingRef.current = true;
+
+    setIsListening(false);
+    setStatusMessage('Finalising transcript…');
+
+    const frozen = liveTranscription.stop();
+    await consultationRecorder.stop().catch(() => null);
+
+    const transcriptText = frozen.text;
+
+    await sessionCheckpoint.save({
+      meetingId,
+      clientRef,
+      entries: frozen.entries,
+      startedAtIso: new Date().toISOString(),
+      wasRecordingAudio: false
+    });
+
+    if (!transcriptText || transcriptText.length < 40) {
+      setStatusMessage(null);
+      endingRef.current = false;
+      alert(
+        'No usable transcript was captured for this assessment.\n\n' +
+          'Live transcription may be unavailable in this browser, or the microphone may not ' +
+          'have picked up speech. Nothing has been submitted.'
+      );
+      return;
+    }
+
+    setScreen('PROCESSING');
+    setStatusMessage('Preparing clinical documentation…');
+
+    try {
+      const started = await submitTranscript(meetingId, transcriptText, clientRef, templateType, sessionFormat);
+      pendingUpload.clear();
+      void sessionCheckpoint.clear(meetingId);
+      pollJob(started.jobId);
+    } catch (err: any) {
+      // The transcript is not lost: it is queued locally and the clinician can retry.
+      pendingUpload.save({
+        meetingId,
+        transcriptText,
+        clientRef,
+        queuedAtIso: new Date().toISOString()
+      });
+      setStatusMessage(
+        `Assessment saved locally — upload pending. ${err.message}. Use Retry below; you do not ` +
+          'need to record the consultation again.'
+      );
+      endingRef.current = false;
+    }
+  };
+
+  const pollJob = useCallback((jobId: string) => {
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const status = await getJobStatus(jobId);
+        setJob(status);
+
+        if (status.state === 'SUCCEEDED') {
+          await openReview();
+          return;
+        }
+        if (status.state === 'FAILED') return;
+      } catch {
+        // A transient poll failure is not a job failure; keep polling.
+      }
+      setTimeout(tick, 2500);
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId]);
+
+  const openReview = async () => {
+    const data = await getReviewDraft(meetingId);
+    setDraft(data);
+    setNoteId(data.noteId);
+    setSections(data.narrative?.sections ?? []);
+    setScreen('REVIEW');
+  };
+
+  const handleRetry = async () => {
+    setStatusMessage('Retrying…');
+    try {
+      const queued = pendingUpload.load();
+      const started = queued
+        ? await submitTranscript(meetingId, queued.transcriptText, clientRef, templateType, sessionFormat)
+        : await retryDocumentation(meetingId);
+      pendingUpload.clear();
+      setJob(null);
+      setScreen('PROCESSING');
+      pollJob(started.jobId);
+    } catch (err: any) {
+      setStatusMessage(`Retry failed: ${err.message}`);
+    }
+  };
+
+  const updateEntry = (sectionId: string, index: number, text: string) => {
+    setSections((prev) =>
+      prev.map((s) =>
+        s.id !== sectionId
+          ? s
+          : { ...s, entries: s.entries.map((e, i) => (i === index ? { ...e, text } : e)) }
+      )
     );
   };
 
-  const handleStopRecording = async () => {
-    const captured = deviceSpeech.stop();
-    setIsListening(false);
-    setInterimText('');
+  const deleteEntry = (sectionId: string, index: number) => {
+    setSections((prev) =>
+      prev.map((s) => (s.id !== sectionId ? s : { ...s, entries: s.entries.filter((_, i) => i !== index) }))
+    );
+  };
 
-    let finalSegs = captured.length > 0 ? captured : segments;
-    if (finalSegs.length === 0) {
-      finalSegs = [{
-        speakerId: 'UNKNOWN',
-        text: 'Consultation conducted. Spoken conversation was not captured by browser recognition.',
-        rawText: 'Consultation conducted. Spoken conversation was not captured by browser recognition.',
-        startTimeMs: 0,
-        endTimeMs: 1000,
-        confidence: null,
-        isCorrected: false,
-        alternativePromoted: false,
-        engineTopHypothesis: ''
-      }];
-    }
-    setScreen('PROCESSING');
+  const addEntry = (sectionId: string) => {
+    setSections((prev) =>
+      prev.map((s) =>
+        s.id !== sectionId
+          ? s
+          : { ...s, entries: [...s.entries, { text: '', requiresReview: false, fieldId: 'clinician_added' }] }
+      )
+    );
+  };
 
-    // Send the recording first. When it is accepted, diarised transcription produces the
-    // authoritative note and the live transcript is only a fallback.
-    let diarisedQueued = false;
-    if (isRecordingAudio) {
-      try {
-        setProcessingNote('Uploading recording for speaker-differentiated transcription…');
-        const recording = await consultationRecorder.stop();
-        const uploaded = await uploadRecording(
-          meetingId,
-          recording.blob,
-          recording.mimeType,
-          recording.durationMs
-        );
-        diarisedQueued = uploaded?.recording?.processingStatus === 'QUEUED';
-      } catch (err: any) {
-        console.error('Recording upload failed:', err);
-        setProcessingNote(
-          `Recording could not be uploaded (${err?.message ?? err}). Falling back to the live ` +
-            'transcript, which cannot identify speakers.'
-        );
-      }
-      setIsRecordingAudio(false);
-    }
-
+  const handleSaveEdits = async () => {
+    setSavingEdits(true);
     try {
-      setProcessingNote(
-        diarisedQueued
-          ? 'Recording queued for speaker-differentiated transcription. Generating an interim draft from the live transcript…'
-          : 'Generating draft from the live transcript. Speakers were not identified.'
+      await saveReviewEdits(
+        noteId,
+        sections.map((s) => ({
+          id: s.id,
+          entries: s.entries.filter((e) => e.text.trim()).map((e) => ({ text: e.text, fieldId: e.fieldId }))
+        }))
       );
-      const result = await submitTranscriptAndProcess(meetingId, finalSegs, 'Clinician', clientRef, templateType, sessionFormat);
-      setExtractionResult(result);
-      setTimeout(() => setScreen('REVIEW'), 1500);
+      setStatusMessage('Edits saved.');
     } catch (err: any) {
-      console.error('Processing error:', err);
-      alert(`Transcript processing failed: ${err.message || 'Server error'}`);
-      setScreen('RECORDING');
+      setStatusMessage(`Could not save edits: ${err.message}`);
     } finally {
-      setProcessingNote('');
+      setSavingEdits(false);
     }
   };
 
   const handleApprove = async () => {
+    if (approving) return;
+    setApproving(true);
     try {
-      const approval = await approveReview(meetingId, 'Clinician');
-      const getFullUrl = (url: string) => (url.startsWith('http') ? url : `${API_BASE_URL}${url}`);
-      setDownloadLinks({
-        pdfUrl: getFullUrl(approval.pdfUrl || `/api/documents/download/${meetingId}.pdf`),
-        docxUrl: getFullUrl(approval.docxUrl || `/api/documents/download/${meetingId}.docx`)
-      });
+      await handleSaveEdits();
+      await approveReview(meetingId, clinicianEmail || 'Clinician');
       setScreen('COMPLETED');
     } catch (err: any) {
-      console.error('Approval error:', err);
-      alert(`Approval failed: ${err.message || 'System error'}`);
+      alert(`Approval failed: ${err.message}`);
+    } finally {
+      setApproving(false);
     }
   };
 
-  const formatTimer = (sec: number) => {
-    const m = Math.floor(sec / 60).toString().padStart(2, '0');
-    const s = (sec % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
+  const formatTimer = (sec: number) =>
+    `${Math.floor(sec / 60).toString().padStart(2, '0')}:${(sec % 60).toString().padStart(2, '0')}`;
+
+  const liveText = [
+    ...transcript.finalEntries.map((e) => e.text),
+    transcript.interimText
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <div className="appContainer">
@@ -214,83 +361,133 @@ function App() {
           <h1 className="title">Vabatim</h1>
         </div>
         <div className="healthBadge">
-          API: <strong style={{ color: apiHealth?.status === 'HEALTHY' ? '#22c55e' : '#f59e0b' }}>
-            {apiHealth?.status || 'ONLINE'}
+          API:{' '}
+          <strong style={{ color: apiHealth?.status === 'HEALTHY' ? '#22c55e' : '#f59e0b' }}>
+            {apiHealth?.status || 'CHECKING'}
           </strong>
         </div>
       </header>
 
       <main className="mainContent">
+        {recovery && screen === 'MEETINGS' && (
+          <div className="warningBanner">
+            An assessment was interrupted with {recovery.entries.length} captured statements.
+            The transcript can be recovered; the audio recording cannot, because the browser
+            closed.{' '}
+            <button
+              className="secondaryButton"
+              onClick={() => {
+                setMeetingId(recovery.meetingId);
+                liveTranscription.restore(recovery.entries);
+                setTranscript(liveTranscription.getState());
+                setRecovery(null);
+                setScreen('RECORDING');
+              }}
+            >
+              Recover transcript
+            </button>{' '}
+            <button
+              className="secondaryButton"
+              onClick={() => {
+                void sessionCheckpoint.clear(recovery.meetingId);
+                setRecovery(null);
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        )}
+
         {screen === 'LOGIN' && (
           <div className="card">
-            <h2>Secure Clinician Access</h2>
-            <form onSubmit={async (e) => {
-              e.preventDefault();
-              const btn = e.currentTarget.querySelector('button');
-              if (btn) btn.disabled = true;
-              try {
-                await loginClinician(clinicianEmail, clinicianPassword);
-                setScreen('MEETINGS');
-              } catch (err: any) {
-                console.error('Login Error:', err);
-                alert(`Login failed: ${err.message || 'Unknown error'}`);
-                if (btn) btn.disabled = false;
-              }
-            }} className="form">
-              <label className="label">Clinician Email (NHS.net)</label>
-              <input type="email" value={clinicianEmail} onChange={(e) => setClinicianEmail(e.target.value)} className="input" required />
+            <h2>Secure clinician access</h2>
+            <form onSubmit={handleLogin} className="form">
+              <label className="label">Clinician email</label>
+              <input
+                type="email"
+                value={clinicianEmail}
+                onChange={(e) => setClinicianEmail(e.target.value)}
+                className="input"
+                autoComplete="username"
+                required
+              />
               <label className="label">Password</label>
-              <input type="password" value={clinicianPassword} onChange={(e) => setClinicianPassword(e.target.value)} className="input" required />
-              <button type="submit" className="primaryButton">Sign In to Clinical Workspace</button>
+              <input
+                type="password"
+                value={clinicianPassword}
+                onChange={(e) => setClinicianPassword(e.target.value)}
+                className="input"
+                autoComplete="current-password"
+                required
+              />
+              <button type="submit" className="primaryButton" disabled={loggingIn}>
+                {loggingIn ? 'Signing in…' : 'Sign in'}
+              </button>
             </form>
           </div>
         )}
 
         {screen === 'MEETINGS' && (
           <div className="card">
-            <h2>New Clinical Session</h2>
-            <p className="hint">Select appointment template and session format</p>
-            <div className="form" style={{ marginTop: '20px' }}>
-              <label className="label">Client Pseudonymous Reference (No raw PII in session ID)</label>
-              <input type="text" value={clientRef} onChange={(e) => setClientRef(e.target.value)} className="input" placeholder="e.g., CLIENT-A8492" />
-              <label className="label">Clinical Documentation Template</label>
-              <select value={templateType} onChange={(e: any) => setTemplateType(e.target.value)} className="input">
-                <option value="INITIAL_ASSESSMENT">1. Initial Assessment (Full 11-Section Wheelchair Note)</option>
-                <option value="REVIEW">2. Review / Handover (Condensed Progress Note)</option>
+            <h2>New assessment</h2>
+            <div className="form" style={{ marginTop: 20 }}>
+              <label className="label">Client reference (pseudonymous — no patient name)</label>
+              <input
+                type="text"
+                value={clientRef}
+                onChange={(e) => setClientRef(e.target.value)}
+                className="input"
+                placeholder="e.g. CLIENT-A8492"
+              />
+              <label className="label">Assessment template</label>
+              <select
+                value={templateType}
+                onChange={(e: any) => setTemplateType(e.target.value)}
+                className="input"
+              >
+                <option value="INITIAL_ASSESSMENT">Initial wheelchair assessment</option>
+                <option value="REVIEW">Review / handover</option>
               </select>
-              <label className="label">Session Format</label>
-              <select value={sessionFormat} onChange={(e: any) => setSessionFormat(e.target.value)} className="input">
-                <option value="FACE_TO_FACE">Face-to-Face Clinical Consultation</option>
-                <option value="VIRTUAL">Virtual / Telehealth Consultation</option>
+              <label className="label">Assessment mode</label>
+              <select
+                value={sessionFormat}
+                onChange={(e: any) => setSessionFormat(e.target.value)}
+                className="input"
+              >
+                <option value="FACE_TO_FACE">In person</option>
+                <option value="VIRTUAL">Remote</option>
               </select>
-              <button onClick={handleCreateMeeting} className="primaryButton">Proceed to Participant Consent</button>
+              <button onClick={handleCreateMeeting} className="primaryButton">
+                Continue to consent
+              </button>
+              <button onClick={() => setScreen('METRICS')} className="secondaryButton">
+                Documentation quality
+              </button>
             </div>
           </div>
         )}
 
         {screen === 'CONSENT' && (
           <div className="card">
-            <h2>Patient & Participant Consent</h2>
-            <p className="hint">Information Governance & Clinical Safety</p>
+            <h2>Consent to record</h2>
             <div className="consentBox">
-              <p>Vabatim records and processes audio during this meeting to produce an evidence-linked clinical documentation draft for wheelchair, seating, and mobility assessment.</p>
-              <p>By proceeding, you confirm that all present parties (Clinician, Client, and Carers) have been informed and explicitly consent to audio recording and AI processing.</p>
-            </div>
-            <div className="checkboxRow">
-              <input type="checkbox" id="consent-check" />
-              <label htmlFor="consent-check">I confirm verbal consent was granted by all participants.</label>
+              <p>
+                Confirm that the person being assessed has been told this consultation will be
+                captured to help produce their clinical notes, and has agreed.
+              </p>
+              <p className="hint">
+                Microphone permission is a browser setting. It is not consent, and granting it
+                does not record consent here.
+              </p>
             </div>
             <div className="buttonGroup">
-              <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">Cancel</button>
-              <button onClick={handleGrantConsent} className="primaryButton">Grant Consent & Start Device Mic</button>
+              <button onClick={handleGrantConsent} className="primaryButton">
+                Consent given — continue
+              </button>
+              <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">
+                Cancel
+              </button>
             </div>
-          </div>
-        )}
-
-        {screen === 'METRICS' && (
-          <div className="card">
-            <button onClick={() => setScreen('MEETINGS')} className="secondaryButton" style={{ marginBottom: '16px' }}>← Back to Meetings</button>
-            <MetricsDashboard />
           </div>
         )}
 
@@ -298,153 +495,172 @@ function App() {
           <div className="card">
             <div className="recordingHeader">
               <div>
-                <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span className="liveIndicator" style={{ backgroundColor: isListening ? '#ef4444' : '#64748b' }}>
-                    {isListening ? '🔴 LIVE' : 'PAUSED'}
-                  </span>
-                  Clinical Session
-                </h2>
-                <p className="hint" style={{ margin: 0 }}>Template: {templateType}</p>
+                <span className={isListening ? 'liveIndicator' : ''} />
+                <strong>{isListening ? 'Assessment in progress' : 'Ready to start'}</strong>
               </div>
               <div className="timerDisplay">{formatTimer(timerSeconds)}</div>
             </div>
 
-            {speechError && (
-              <div className="warningBanner">⚠️ {speechError}</div>
-            )}
+            <p className="hint">
+              Microphone: {recorderState === 'RECORDING' ? 'recording' : recorderState.toLowerCase()}
+              {!transcriptionAvailable && ' · live transcription unavailable in this browser'}
+            </p>
 
-            {!isSpeechSupported && (
-              <div className="infoBox" style={{ marginBottom: '16px' }}>
-                Note: Simulating speech capture because SpeechRecognition is not supported on this browser.
-              </div>
-            )}
+            {statusMessage && <div className="warningBanner">{statusMessage}</div>}
 
-            <div className="transcriptStream">
-              {segments.map((seg, idx) => (
-                <div key={idx} className="segmentBubble">
-                  {seg.speakerId && seg.speakerId !== 'UNKNOWN' && (
-                    <span className="speakerLabel">{seg.speakerId}:</span>
+            {/*
+              A single flowing transcript. There are deliberately no speaker labels: the
+              browser cannot tell who is speaking, and showing a guess would be worse than
+              showing nothing.
+            */}
+            <div className="transcriptStream scrollBox">
+              {liveText ? (
+                <p>
+                  {transcript.finalEntries.map((e) => e.text).join(' ')}
+                  {transcript.interimText && (
+                    <span style={{ opacity: 0.55 }}> {transcript.interimText}</span>
                   )}
-                  <span>{seg.text}</span>
-                </div>
-              ))}
-              {interimText && (
-                <div className="segmentBubble" style={{ opacity: 0.7, fontStyle: 'italic' }}>
-                  <span className="speakerLabel">Hearing:</span>
-                  <span>{interimText}...</span>
-                </div>
+                </p>
+              ) : (
+                <p className="hint">
+                  {isListening
+                    ? 'Listening… speech will appear here as it is recognised.'
+                    : 'Press Start assessment and have the consultation as normal.'}
+                </p>
               )}
-              {segments.length === 0 && !interimText && (
-                <div style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>
-                  Listening for conversation...
-                </div>
-              )}
+              <div ref={transcriptEndRef} />
             </div>
 
             <div className="buttonGroup">
-              <button onClick={isListening ? handleStopRecording : handleStartRecording} className="dangerButton">
-                {isListening ? '⏹ End Session' : '🎙️ Start Mic'}
-              </button>
+              {!isListening ? (
+                <button onClick={handleStart} className="primaryButton">
+                  Start assessment
+                </button>
+              ) : (
+                <button onClick={handleEndAssessment} className="dangerButton" disabled={endingRef.current}>
+                  End assessment
+                </button>
+              )}
             </div>
           </div>
         )}
 
         {screen === 'PROCESSING' && (
-          <div className="card" style={{ textAlign: 'center', padding: '40px' }}>
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚙️</div>
-            <h2>Processing the consultation</h2>
-            <p className="hint">
-              {processingNote ||
-                'Transcription ➔ clinical extraction ➔ evidence grounding ➔ completeness review'}
-            </p>
+          <div className="card" style={{ textAlign: 'center', padding: 40 }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>⚙️</div>
+            <h2>{job?.stage ?? statusMessage ?? 'Preparing clinical documentation…'}</h2>
+            <p className="hint">{job ? `${job.progress}%` : ''}</p>
+
+            {job?.state === 'FAILED' && (
+              <>
+                <div className="warningBanner">
+                  Documentation could not be generated. {job.error}
+                  <br />
+                  Your transcript is saved — you do not need to record the consultation again.
+                </div>
+                <button onClick={handleRetry} className="primaryButton">
+                  Retry documentation generation
+                </button>
+              </>
+            )}
           </div>
         )}
 
         {screen === 'REVIEW' && (
           <div className="card">
-            <h2>Clinician Review & Evidence Grounding Verification</h2>
             <div className="draftNoticeBanner">
-              📝 AI-generated draft — clinician review required
+              <strong>Assessment note generated — review required.</strong> This is a draft. It
+              becomes a clinical record only when you approve it.
             </div>
 
-            {extractionResult?.validatedNote?.warnings?.rapidSpeechWarning && (
+            {draft?.reviewFlags?.length > 0 && (
               <div className="warningBanner">
-                ⚠️ <strong>Rapid Speech Warning:</strong> Some speech may have been unclear or incorrectly transcribed.
+                <strong>{draft.reviewFlags.length} item(s) need your attention</strong>
+                <ul>
+                  {draft.reviewFlags.map((f: any, i: number) => (
+                    <li key={i}>{f.description}</li>
+                  ))}
+                </ul>
               </div>
             )}
 
-            <p className="hint">
-              Template: <strong>{templateType}</strong> | Format: <strong>{sessionFormat}</strong>
-            </p>
-
-            <div className="sideBySideGrid">
-              <div className="reviewCol">
-                <h3 style={{ color: '#38bdf8' }}>1. Authoritative Source Transcript</h3>
-                <div className="scrollBox">
-                  {segments.map((s, i) => (
-                    <p key={i} style={{ marginBottom: '8px', fontSize: '13px' }}>
-                      <strong>{s.speakerId}:</strong> {s.text}
-                    </p>
+            <div className="scrollBox" style={{ maxHeight: '60vh' }}>
+              {sections.map((section) => (
+                <div key={section.id} className="noteItem">
+                  <h3>{section.title}</h3>
+                  {section.entries.length === 0 && (
+                    <p className="hint">{section.notEstablished ?? 'Not discussed during this assessment.'}</p>
+                  )}
+                  {section.entries.map((entry, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                      <textarea
+                        className="input"
+                        style={{ flex: 1, minHeight: 60 }}
+                        value={entry.text}
+                        onChange={(e) => updateEntry(section.id, i, e.target.value)}
+                      />
+                      <button
+                        className="secondaryButton"
+                        onClick={() => deleteEntry(section.id, i)}
+                        aria-label="Remove this statement"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   ))}
+                  <button className="secondaryButton" onClick={() => addEntry(section.id)}>
+                    + Add
+                  </button>
                 </div>
-              </div>
-
-              <div className="reviewCol">
-                <h3 style={{ color: '#4ade80' }}>2. Wheelchair & Seating Clinical Note</h3>
-                <div className="scrollBox">
-                  <p><strong>1. Reason for Contact / Referral:</strong></p>
-                  <p className="noteItem">
-                    <span className="tagBadge">[CLINICAL_INTERPRETATION]</span> {extractionResult?.validatedNote?.sessionInfo?.reasonForReferral?.[0]?.value || 'Initial wheelchair & seating assessment'}
-                  </p>
-
-                  <p><strong>2. Subjective Information & Concerns:</strong></p>
-                  <p className="noteItem">
-                    <span className="tagBadge">[PATIENT_REPORTED]</span> {extractionResult?.validatedNote?.subjectiveInfo?.presentingConcerns?.[0]?.value || 'Sacral pressure sore after 2 hours in sling seat.'}
-                  </p>
-
-                  <p><strong>3. Functional Assessment & Barriers:</strong></p>
-                  <p className="noteItem">
-                    <span className="tagBadge">[PATIENT_REPORTED]</span> {extractionResult?.validatedNote?.functionalAssessment?.mobilityStatus?.[0]?.value || '2 entrance steps to home, 680mm bathroom door frame.'}
-                  </p>
-
-                  <p><strong>4. Objective Findings & MAT Assessment:</strong></p>
-                  <p className="noteItem">
-                    <span className="tagBadge">[CLINICIAN_OBSERVED]</span> {extractionResult?.validatedNote?.objectiveFindings?.assessmentFindings?.[0]?.value || '15-degree posterior pelvic tilt, 10-degree right pelvic obliquity.'}
-                  </p>
-                </div>
-              </div>
+              ))}
             </div>
 
-            <div style={{ marginTop: '20px', textAlign: 'right' }}>
-              <button onClick={handleApprove} className="successButton">
-                ✅ Approve & Sign Clinical Documentation
+            <div className="buttonGroup">
+              <button onClick={handleSaveEdits} className="secondaryButton" disabled={savingEdits}>
+                {savingEdits ? 'Saving…' : 'Save edits'}
+              </button>
+              <button onClick={handleApprove} className="successButton" disabled={approving}>
+                {approving ? 'Approving…' : 'Approve & finalise'}
               </button>
             </div>
+            {statusMessage && <p className="hint">{statusMessage}</p>}
           </div>
         )}
 
         {screen === 'COMPLETED' && (
-          <div className="card" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '48px', color: '#22c55e', marginBottom: '10px' }}>✅</div>
-            <h2>Clinical Documentation Signed & Approved</h2>
+          <div className="card">
             <div className="approvedNoticeBanner">
-              ✅ Clinician-approved clinical note
+              <strong>Approved.</strong> This assessment note is now a finalised clinical record.
             </div>
-            <p className="hint">PDF and DOCX professional clinical notes generated and secured in Supabase Storage.</p>
+            <div className="downloadRow">
+              <a
+                className="downloadButton"
+                href={`${API_BASE_URL}/api/documents/${noteId}/pdf`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Download PDF
+              </a>
+              <a
+                className="downloadButton"
+                href={`${API_BASE_URL}/api/documents/${noteId}/docx`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Download DOCX
+              </a>
+            </div>
+            <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">
+              New assessment
+            </button>
+          </div>
+        )}
 
-            {downloadLinks && (
-              <div className="downloadRow">
-                <a href={downloadLinks.pdfUrl} target="_blank" rel="noreferrer" className="downloadButton">
-                  📄 Download Signed PDF Report
-                </a>
-                <a href={downloadLinks.docxUrl} target="_blank" rel="noreferrer" className="downloadButton">
-                  📝 Download Editable DOCX Note
-                </a>
-              </div>
-            )}
-
-            <button onClick={() => setScreen('MEETINGS')} className="primaryButton" style={{ marginTop: '30px' }}>
-              Return to Clinical Workspace
+        {screen === 'METRICS' && (
+          <div className="card">
+            <MetricsDashboard />
+            <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">
+              Back
             </button>
           </div>
         )}

@@ -12,9 +12,20 @@ const envSchema = z.object({
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
   JWT_SECRET: z.string().default('development-secret-change-in-prod'),
   JWT_EXPIRES_IN: z.string().default('24h'),
-  // 'device' captures in the browser and cannot diarise. Use 'google' or 'azure' for
-  // speaker-differentiated transcription with clinical speech adaptation.
+  // 'device' captures and transcribes in the clinician's browser at no cost, and cannot
+  // separate speakers. 'google' and 'azure' are OPTIONAL paid adapters that add diarisation
+  // and clinical speech adaptation; nothing in the product requires them.
   SPEECH_PROVIDER: z.enum(['device', 'mock', 'google', 'azure']).default('device'),
+  // 'none' is a fully supported configuration. The system never fabricates speaker labels.
+  DIARIZATION_PROVIDER: z.enum(['none', 'local_future', 'azure_future', 'google_future']).default('none'),
+  // inline runs documentation generation in the web service; queue hands it to a worker.
+  PROCESSING_MODE: z.enum(['inline', 'queue']).default('inline'),
+  CORS_ORIGIN: z.string().optional(),
+  ALLOW_VERCEL_PREVIEWS: z.string().optional(),
+  // Retention is organisational policy, not a legal constant baked into the product.
+  STORE_AUDIO: z.string().default('false'),
+  AUDIO_RETENTION_HOURS: z.string().default('24'),
+  TRANSCRIPT_RETENTION_DAYS: z.string().default('30'),
   GOOGLE_SPEECH_API_KEY: z.string().optional(),
   GOOGLE_ACCESS_TOKEN: z.string().optional(),
   AZURE_SPEECH_KEY: z.string().optional(),
@@ -60,10 +71,10 @@ if (env.NODE_ENV === 'production') {
     );
   }
   if (env.SPEECH_PROVIDER === 'device') {
-    console.warn(
-      '[config] SPEECH_PROVIDER=device: recognition runs in the clinician browser, which ' +
-        'cannot separate speakers or bias toward clinical vocabulary. Statements will be ' +
-        'recorded as unattributed. Set google or azure for diarised clinical transcription.'
+    console.log(
+      '[config] SPEECH_PROVIDER=device: transcription runs in the clinician browser at no ' +
+        'cost. Speakers are not separated and statements are recorded unattributed, which is ' +
+        'the intended free-tier behaviour.'
     );
   }
 }

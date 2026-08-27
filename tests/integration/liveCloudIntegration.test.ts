@@ -13,7 +13,7 @@ describe('Live Cloud Integration & Deployment Verification', () => {
     const res = await request(app).get('/health/speech-provider');
     expect(res.status).toBe(200);
     expect(res.body.providerName).toBeDefined();
-    expect(['CONNECTED', 'NOT CONFIGURED']).toContain(res.body.status);
+    expect(['CONNECTED', 'CONFIGURED', 'NOT CONFIGURED']).toContain(res.body.status);
   });
 
   it('3. SUPABASE STORAGE PROVIDER: Safely handles unconfigured credential status', async () => {

@@ -1,257 +1,260 @@
-import {
-  correctClinicalText,
-  rescoreAlternatives,
-  buildJsgfGrammar,
-  AsrAlternative
-} from '../shared/clinicalLexicon';
+/**
+ * Live device transcription.
+ *
+ * Two design rules, both learned from defects:
+ *
+ * 1. NO SPEAKER LABELS. The W3C SpeechRecognition API performs no diarisation whatsoever. It
+ *    returns words with no indication of who produced them. Any label this layer emitted
+ *    would be invented — the previous version alternated "Speaker 1 (Therapist)" and
+ *    "Speaker 2 (Client)" on utterance parity, so two consecutive patient sentences were
+ *    recorded as one patient statement and one clinician statement. There is no speaker
+ *    field on the transcript at all now, so nothing downstream can start guessing again.
+ *
+ * 2. INTERIM RESULTS ARE UI, NOT TRANSCRIPT. The recogniser emits a growing interim
+ *    hypothesis — "I believe", "I believe the", "I believe the chair" — before it commits.
+ *    Appending those produces three fragments where the clinician said one sentence. Interim
+ *    text is held separately and replaced; only final results are appended, once each.
+ *
+ * This class is also strictly independent of audio recording. Recognition stopping must
+ * never stop the recorder, and vice versa.
+ */
 
-export interface SpeechSegment {
-  /** Raw engine/diarisation label. 'UNKNOWN' when the engine gives no speaker signal. */
-  speakerId: string;
-  /** Clinically corrected text used for documentation. */
+export interface TranscriptEntry {
+  /** Committed text. No speaker attribution: the browser does not know and does not guess. */
   text: string;
-  /** Untouched engine output, retained as evidence. Never overwritten. */
-  rawText: string;
-  startTimeMs: number;
-  endTimeMs: number;
-  /**
-   * Engine-reported confidence in [0,1], or null when the engine did not supply one.
-   * MUST NOT be defaulted to a high value: downstream safety checks rely on null
-   * meaning "unknown", not "good".
-   */
+  /** Milliseconds from session start, for ordering and for the clinician's own reference. */
+  atMs: number;
+  /** Engine confidence in [0,1], or null when it reported none. Null means unknown, not good. */
   confidence: number | null;
-  /** True when the clinical lexicon pass altered the text. */
-  isCorrected: boolean;
-  /** True when a lower-ranked ASR alternative was promoted on clinical-vocabulary grounds. */
-  alternativePromoted: boolean;
-  /** The engine's own preferred hypothesis, kept for clinician review. */
-  engineTopHypothesis: string;
 }
 
-export interface SpeechDiagnostics {
-  /** True when no engine confidence values were available for the whole session. */
-  confidenceUnavailable: boolean;
-  /** True when speaker attribution could not be established from the engine. */
-  speakerAttributionUnavailable: boolean;
-  /** Number of times the recogniser had to be restarted (words can be lost at each). */
+export interface LiveTranscriptState {
+  /** Everything committed so far. */
+  finalEntries: TranscriptEntry[];
+  /** The current uncommitted hypothesis. Displayed, never stored. */
+  interimText: string;
+}
+
+export interface RecognitionDiagnostics {
+  supported: boolean;
+  /** True once recognition has produced at least one final result. */
+  producedAnyText: boolean;
   restartCount: number;
-  /** Utterances where recognition was restarted mid-speech. */
-  possibleWordLossEvents: number;
+  /** Set when recognition stopped for good, with the reason. */
   fatalError: string | null;
+  /** True when the engine never supplied confidence values. */
+  confidenceUnavailable: boolean;
+  /** True when on-device processing was requested and accepted by the browser. */
+  localProcessing: boolean;
 }
 
-/** Errors after which restarting the recogniser is pointless or harmful. */
-const FATAL_ERRORS = new Set(['not-allowed', 'service-not-allowed', 'bad-grammar', 'language-not-supported']);
+/** Errors after which restarting is pointless or harmful. */
+const FATAL_ERRORS = new Set(['not-allowed', 'service-not-allowed', 'language-not-supported', 'bad-grammar']);
 
-export class DeviceBrowserSpeechService {
+function getRecognitionConstructor(): any {
+  if (typeof window === 'undefined') return null;
+  return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
+}
+
+export class LiveTranscriptionService {
   private recognition: any = null;
-  private isListening = false;
+  private listening = false;
+  private stopping = false;
   private sessionStartMs = 0;
-  private utteranceStartMs: number | null = null;
-  private segments: SpeechSegment[] = [];
-  private restartAttempts = 0;
+
+  private finalEntries: TranscriptEntry[] = [];
+  private interimText = '';
+
   private restartCount = 0;
-  private possibleWordLossEvents = 0;
-  private sawAnyConfidence = false;
+  private restartAttempts = 0;
   private fatalError: string | null = null;
-  private pendingInterim = '';
-  private onErrorCb: ((err: string) => void) | null = null;
+  private sawConfidence = false;
+  private localProcessing = false;
 
-  constructor(private language: string = 'en-GB') {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  private onUpdate: ((state: LiveTranscriptState) => void) | null = null;
+  private onStatus: ((message: string) => void) | null = null;
 
-    if (!SpeechRecognition) return;
+  static isSupported(): boolean {
+    return getRecognitionConstructor() !== null;
+  }
 
-    this.recognition = new SpeechRecognition();
+  /**
+   * Starts live recognition.
+   *
+   * Resolves as soon as recognition has been requested. It never throws for an unsupported
+   * browser: the assessment must still be recordable, and the caller is told through
+   * onStatus so it can show "Live transcription unavailable on this browser".
+   */
+  start(onUpdate: (state: LiveTranscriptState) => void, onStatus: (message: string) => void): boolean {
+    const Ctor = getRecognitionConstructor();
+    this.onUpdate = onUpdate;
+    this.onStatus = onStatus;
+
+    if (!Ctor) {
+      onStatus('Live transcription is unavailable in this browser. Audio recording will continue.');
+      return false;
+    }
+
+    this.recognition = new Ctor();
     this.recognition.continuous = true;
     this.recognition.interimResults = true;
-    this.recognition.lang = this.language;
-    // Request an n-best list so clinical terminology can outrank the engine's
-    // general-English first guess. Without this the engine returns one hypothesis only.
-    this.recognition.maxAlternatives = 5;
+    this.recognition.lang = 'en-GB';
+    this.recognition.maxAlternatives = 1;
 
-    // Bias the engine toward clinical vocabulary where the browser supports grammars.
-    const SpeechGrammarList =
-      (window as any).SpeechGrammarList || (window as any).webkitSpeechGrammarList;
-    if (SpeechGrammarList) {
-      try {
-        const list = new SpeechGrammarList();
-        list.addFromString(buildJsgfGrammar(), 1);
-        this.recognition.grammars = list;
-      } catch {
-        // Grammar support is optional; recognition still works without it.
-      }
-    }
-  }
-
-  isSupported(): boolean {
-    return !!this.recognition;
-  }
-
-  async requestMicrophonePermission(): Promise<boolean> {
+    // On-device recognition keeps the consultation off third-party servers. It is very new
+    // and absent almost everywhere, so it is feature-detected and simply skipped when the
+    // property is not present — never assumed.
     try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            // Clinical rooms are quiet but reverberant; these help intelligibility
-            // without the aggressive processing that clips consonants.
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            channelCount: 1
-          }
-        });
-        stream.getTracks().forEach((t) => t.stop());
-        return true;
+      if ('processLocally' in this.recognition) {
+        this.recognition.processLocally = true;
+        this.localProcessing = true;
       }
-      return false;
-    } catch (err) {
-      console.warn('Microphone permission denied:', err);
-      return false;
-    }
-  }
-
-  start(
-    onInterim: (text: string) => void,
-    onFinalSegment: (segment: SpeechSegment) => void,
-    onError: (err: string) => void
-  ) {
-    if (!this.recognition) {
-      onError(
-        'Speech recognition is not available in this browser. Recording cannot proceed — ' +
-          'no clinical note will be generated. Use a supported browser (Chrome or Edge).'
-      );
-      return;
+    } catch {
+      this.localProcessing = false;
     }
 
-    this.onErrorCb = onError;
     this.sessionStartMs = Date.now();
-    this.isListening = true;
-    this.restartAttempts = 0;
+    this.listening = true;
+    this.stopping = false;
     this.fatalError = null;
+    this.restartAttempts = 0;
 
-    this.recognition.onspeechstart = () => {
-      this.utteranceStartMs = Date.now() - this.sessionStartMs;
-    };
-
-    this.recognition.onresult = (event: any) => {
-      let interim = '';
-
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        const result = event.results[i];
-
-        const alternatives: AsrAlternative[] = [];
-        for (let a = 0; a < result.length; a++) {
-          alternatives.push({
-            transcript: result[a].transcript,
-            confidence:
-              typeof result[a].confidence === 'number' && result[a].confidence > 0
-                ? result[a].confidence
-                : null
-          });
-        }
-
-        if (!result.isFinal) {
-          interim += alternatives[0]?.transcript ?? '';
-          continue;
-        }
-
-        const rescored = rescoreAlternatives(alternatives);
-        if (!rescored.transcript) continue;
-
-        const corrected = correctClinicalText(rescored.transcript);
-        if (rescored.confidence !== null) this.sawAnyConfidence = true;
-
-        const endTimeMs = Date.now() - this.sessionStartMs;
-        // Use the real speech-onset time where the engine reported one, and never
-        // emit a negative or inverted interval.
-        const startTimeMs =
-          this.utteranceStartMs !== null && this.utteranceStartMs < endTimeMs
-            ? this.utteranceStartMs
-            : Math.max(0, endTimeMs - 1);
-        this.utteranceStartMs = null;
-
-        const segment: SpeechSegment = {
-          // Chrome's Web Speech API performs no diarisation. Alternating labels would be
-          // fabricated attribution, so speakers stay UNKNOWN until a real signal exists.
-          speakerId: 'UNKNOWN',
-          text: corrected.text,
-          rawText: rescored.engineTopHypothesis,
-          startTimeMs,
-          endTimeMs,
-          confidence: rescored.confidence,
-          isCorrected: corrected.isCorrected,
-          alternativePromoted: rescored.promoted,
-          engineTopHypothesis: rescored.engineTopHypothesis
-        };
-
-        this.segments.push(segment);
-        onFinalSegment(segment);
-      }
-
-      this.pendingInterim = interim;
-      onInterim(interim);
-    };
+    this.recognition.onresult = (event: any) => this.handleResult(event);
 
     this.recognition.onerror = (event: any) => {
       const code = event?.error ?? 'unknown';
+
       if (FATAL_ERRORS.has(code)) {
         this.fatalError = code;
-        this.isListening = false;
-        onError(
-          `Speech recognition stopped: ${code}. Recording has ended — check microphone ` +
-            'permissions and restart the session.'
+        this.listening = false;
+        onStatus(
+          code === 'not-allowed'
+            ? 'Microphone access was blocked, so live transcription has stopped.'
+            : `Live transcription stopped (${code}).`
         );
         return;
       }
-      // 'no-speech' and 'aborted' are routine during a consultation; surface others.
+      // 'no-speech' and 'aborted' are routine in a consultation with natural pauses.
       if (code !== 'no-speech' && code !== 'aborted') {
-        onError(`Speech recognition warning: ${code}`);
+        onStatus(`Live transcription hiccup (${code}) — continuing.`);
       }
     };
 
-    this.recognition.onend = () => {
-      if (!this.isListening || this.fatalError) return;
-
-      // Interim text at the moment of restart is lost by the engine. Record that so the
-      // clinician is told words may be missing, rather than silently dropping them.
-      if (this.pendingInterim.trim()) {
-        this.possibleWordLossEvents++;
-        this.pendingInterim = '';
-      }
-
-      this.restartCount++;
-      const backoffMs = Math.min(2000, 100 * Math.pow(2, this.restartAttempts));
-      this.restartAttempts++;
-
-      setTimeout(() => {
-        if (!this.isListening || this.fatalError) return;
-        try {
-          this.recognition.start();
-          this.restartAttempts = 0;
-        } catch (err: any) {
-          if (this.restartAttempts > 6) {
-            this.isListening = false;
-            this.fatalError = 'restart-failed';
-            this.onErrorCb?.(
-              'Speech recognition could not be restarted. Recording has stopped; ' +
-                'the transcript captured so far has been kept.'
-            );
-          }
-        }
-      }, backoffMs);
-    };
+    this.recognition.onend = () => this.handleEnd();
 
     try {
       this.recognition.start();
+      return true;
     } catch (err: any) {
-      onError(`Failed to start recognition: ${err?.message ?? err}`);
+      onStatus(`Live transcription could not start (${err?.message ?? err}). Recording continues.`);
+      return false;
     }
   }
 
-  stop(): SpeechSegment[] {
-    this.isListening = false;
+  /**
+   * Handles a recognition event.
+   *
+   * The event carries results from `resultIndex` onward. Final results are appended once;
+   * everything still interim is concatenated into the single replaceable interim string.
+   */
+  private handleResult(event: any): void {
+    // Once the clinician has ended the assessment the transcript is frozen. Engines can
+    // deliver a straggling final result after stop(); accepting it would silently change a
+    // transcript the clinician has already been shown and submitted.
+    if (this.stopping || !this.listening) return;
+
+    let interim = '';
+
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      const alternative = result[0];
+      const transcript = String(alternative?.transcript ?? '').trim();
+      if (!transcript) continue;
+
+      if (!result.isFinal) {
+        interim += (interim ? ' ' : '') + transcript;
+        continue;
+      }
+
+      const confidence =
+        typeof alternative.confidence === 'number' && alternative.confidence > 0
+          ? alternative.confidence
+          : null;
+      if (confidence !== null) this.sawConfidence = true;
+
+      // Some engines re-emit a final result that was already committed, particularly around
+      // a restart. Committing it twice would duplicate a clinical statement.
+      if (this.isDuplicateOfRecent(transcript)) continue;
+
+      this.finalEntries.push({
+        text: transcript,
+        atMs: Date.now() - this.sessionStartMs,
+        confidence
+      });
+    }
+
+    // Interim is always replaced, never accumulated.
+    this.interimText = interim;
+    this.emit();
+  }
+
+  /** Guards against the engine re-delivering a final result it has already given us. */
+  private isDuplicateOfRecent(text: string): boolean {
+    const normalise = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+    const candidate = normalise(text);
+    if (!candidate) return true;
+
+    return this.finalEntries.slice(-3).some((e) => normalise(e.text) === candidate);
+  }
+
+  /**
+   * Restarts recognition when the engine stops on its own.
+   *
+   * Browsers end recognition periodically even with `continuous = true`. Restarting keeps
+   * the live transcript going, but only while the clinician is still recording, never after
+   * a deliberate stop, and never after a fatal error — each of which would otherwise produce
+   * a tight restart loop.
+   */
+  private handleEnd(): void {
+    if (!this.listening || this.stopping || this.fatalError) return;
+
+    this.restartCount++;
+    const backoffMs = Math.min(2000, 150 * Math.pow(2, this.restartAttempts));
+    this.restartAttempts++;
+
+    setTimeout(() => {
+      if (!this.listening || this.stopping || this.fatalError) return;
+      try {
+        this.recognition.start();
+        this.restartAttempts = 0;
+      } catch {
+        if (this.restartAttempts > 6) {
+          this.fatalError = 'restart-failed';
+          this.listening = false;
+          this.onStatus?.(
+            'Live transcription could not be restarted. Audio recording is unaffected and the ' +
+              'transcript captured so far has been kept.'
+          );
+        }
+      }
+    }, backoffMs);
+  }
+
+  private emit(): void {
+    this.onUpdate?.({ finalEntries: [...this.finalEntries], interimText: this.interimText });
+  }
+
+  /**
+   * Stops recognition and freezes the transcript.
+   *
+   * Any pending interim text is deliberately DISCARDED rather than committed: it is an
+   * uncommitted hypothesis the engine had not settled on, and promoting it to the clinical
+   * record would be inventing the one thing the engine declined to assert.
+   */
+  stop(): { text: string; entries: TranscriptEntry[]; discardedInterim: string } {
+    this.stopping = true;
+    this.listening = false;
+
     if (this.recognition) {
       try {
         this.recognition.stop();
@@ -259,31 +262,57 @@ export class DeviceBrowserSpeechService {
         // Already stopped.
       }
     }
-    return this.segments;
-  }
 
-  getCapturedSegments(): SpeechSegment[] {
-    return this.segments;
-  }
+    const discardedInterim = this.interimText;
+    this.interimText = '';
+    this.emit();
 
-  getDiagnostics(): SpeechDiagnostics {
     return {
-      confidenceUnavailable: this.segments.length > 0 && !this.sawAnyConfidence,
-      speakerAttributionUnavailable: true,
-      restartCount: this.restartCount,
-      possibleWordLossEvents: this.possibleWordLossEvents,
-      fatalError: this.fatalError
+      text: this.getFrozenText(),
+      entries: [...this.finalEntries],
+      discardedInterim
     };
   }
 
+  /** The authoritative transcript: committed results only, in order, as flowing text. */
+  getFrozenText(): string {
+    return this.finalEntries
+      .map((e) => e.text.trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  getState(): LiveTranscriptState {
+    return { finalEntries: [...this.finalEntries], interimText: this.interimText };
+  }
+
+  getDiagnostics(): RecognitionDiagnostics {
+    return {
+      supported: LiveTranscriptionService.isSupported(),
+      producedAnyText: this.finalEntries.length > 0,
+      restartCount: this.restartCount,
+      fatalError: this.fatalError,
+      confidenceUnavailable: this.finalEntries.length > 0 && !this.sawConfidence,
+      localProcessing: this.localProcessing
+    };
+  }
+
+  /** Restores a checkpointed transcript after an accidental refresh. */
+  restore(entries: TranscriptEntry[]): void {
+    this.finalEntries = [...entries];
+    this.emit();
+  }
+
   reset(): void {
-    this.segments = [];
+    this.finalEntries = [];
+    this.interimText = '';
     this.restartCount = 0;
-    this.possibleWordLossEvents = 0;
-    this.sawAnyConfidence = false;
+    this.restartAttempts = 0;
     this.fatalError = null;
-    this.pendingInterim = '';
+    this.sawConfidence = false;
   }
 }
 
-export const deviceSpeech = new DeviceBrowserSpeechService('en-GB');
+export const liveTranscription = new LiveTranscriptionService();

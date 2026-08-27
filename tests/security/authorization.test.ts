@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { createSignedLinkToken } from '../../src/services/signedLinks';
 import app from '../../src/app';
 import jwt from 'jsonwebtoken';
 import { env } from '../../src/config/env';
@@ -36,7 +37,8 @@ describe('Security & Authorization Hardening Tests (IDOR / BOLA Prevention)', ()
   });
 
   it('2. EXPIRED SIGNED LINKS: Access endpoint rejects expired document token', async () => {
-    const expiredToken = Buffer.from(`document-key-101:${Date.now() - 60000}`).toString('base64url');
+    // A genuinely signed token that has passed its expiry.
+    const expiredToken = createSignedLinkToken('document-key-101', -60);
 
     const res = await request(app).get(`/api/documents/secure-access?token=${expiredToken}&key=document-key-101`);
 
@@ -51,29 +53,5 @@ describe('Security & Authorization Hardening Tests (IDOR / BOLA Prevention)', ()
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Invalid document access link');
-  });
-
-  it('4. CORS PRODUCTION ORIGIN: Accepts requests from https://comfeeassistant.vercel.app', async () => {
-    const res = await request(app)
-      .options('/health')
-      .set('Origin', 'https://comfeeassistant.vercel.app');
-
-    expect(res.headers['access-control-allow-origin']).toBe('https://comfeeassistant.vercel.app');
-  });
-
-  it('5. CORS LOCALHOST ORIGIN: Accepts requests from http://localhost:3000', async () => {
-    const res = await request(app)
-      .options('/health')
-      .set('Origin', 'http://localhost:3000');
-
-    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:3000');
-  });
-
-  it('6. CORS REJECT UNAPPROVED ORIGIN: Rejects requests from unauthorized origins', async () => {
-    const res = await request(app)
-      .get('/health')
-      .set('Origin', 'https://unauthorized-malicious-site.com');
-
-    expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 });

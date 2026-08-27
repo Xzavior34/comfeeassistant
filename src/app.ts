@@ -3,6 +3,10 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { errorHandler } from './middleware/errorHandler';
+import { env } from './config/env';
+import { prisma } from './db';
+import { isEmailDeliveryConfigured } from './providers/email';
+import { buildCorsOptions, rejectDisallowedOrigin, buildAllowedOrigins } from './config/cors';
 
 import { getSpeechProvider } from './providers/speech';
 import { getStorageProvider } from './providers/storage';
@@ -23,30 +27,10 @@ const app = express();
 // Security & CORS Middleware
 app.use(helmet());
 
-// CORS_ORIGIN accepts a comma-separated list so preview deployments can be allowed
-// alongside production. Requests proxied through the Vercel rewrite are same-origin and
-// never reach this check.
-const allowedOrigins = [
-  'https://comfeeassistant.vercel.app',
-  ...(process.env.CORS_ORIGIN ?? '').split(',').map((o) => o.trim()),
-  process.env.APP_BASE_URL,
-  'http://localhost:3000',
-  'http://localhost:5173'
-].filter((val): val is string => Boolean(val));
+app.use(cors(buildCorsOptions()));
+app.use(rejectDisallowedOrigin());
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.warn(`[CORS Blocked Origin]: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
+console.log(`[cors] Allowed origins: ${buildAllowedOrigins().join(', ')}`);
 
 // Ordinary API traffic is small; a tight limit here is a cheap denial-of-service control.
 // The recording upload is the one exception and raises its own limit below, rather than
@@ -62,10 +46,13 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Consultation audio arrives base64-encoded, so the body is roughly a third larger than the
-// recording. 20 MB accommodates the 12 MB audio cap the route enforces. Without this the
-// default 100 KB limit rejects every upload with 413 before the handler ever runs.
-app.use('/api/recordings', express.json({ limit: '20mb' }));
+// Optional audio upload is raw binary, not base64 inside JSON. Binary avoids the ~33%
+// inflation base64 costs, keeps the whole consultation out of a single JavaScript string,
+// and means the rest of the API keeps its tight 256 KB JSON limit.
+app.use(
+  '/api/recordings',
+  express.raw({ type: ['audio/*', 'application/octet-stream'], limit: '25mb' })
+);
 
 // Root Operational Route
 app.get('/', (req, res) => {
@@ -78,47 +65,102 @@ app.get('/', (req, res) => {
   });
 });
 
-// Granular Sanitized Cloud Health Endpoints (No PII / Credentials exposed)
+/**
+ * Health endpoints.
+ *
+ * These report what is CONFIGURED and, where it is cheap and safe to check, what is
+ * VERIFIED. The previous versions returned "CONNECTED" for the database and the queue
+ * without contacting either — a health check that cannot fail tells you nothing, and during
+ * the recent outage it reported a healthy system while every request was failing.
+ *
+ * No secret, connection string or patient information appears in any response.
+ */
 app.get('/health', (req, res) => {
-  res.json({ status: 'HEALTHY', service: 'Vabatim API', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'HEALTHY',
+    service: 'Vabatim API',
+    mode: {
+      // The operating shape of this deployment, at a glance.
+      speech: env.SPEECH_PROVIDER,
+      diarization: env.DIARIZATION_PROVIDER,
+      processing: env.PROCESSING_MODE,
+      llm: env.LLM_PROVIDER,
+      storage: env.STORAGE_PROVIDER,
+      emailDelivery: isEmailDeliveryConfigured() ? 'configured' : 'not configured'
+    },
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get('/health/database', async (req, res) => {
-  // Database ping status check
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl || dbUrl.includes('localhost')) {
-    return res.json({ status: 'CONNECTED', database: 'PostgreSQL (Local Test Database)', provider: 'Prisma' });
+  try {
+    // An actual round trip. Anything less is a guess.
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: 'VERIFIED', component: 'database' });
+  } catch (err: any) {
+    res.status(503).json({
+      status: 'UNREACHABLE',
+      component: 'database',
+      // Message only; never the connection string.
+      detail: String(err?.message ?? err).slice(0, 200)
+    });
   }
-  return res.json({ status: 'CONNECTED', database: 'Supabase PostgreSQL (eu-west-2 London)', provider: 'Prisma' });
 });
 
 app.get('/health/storage', async (req, res) => {
   const storage = getStorageProvider();
-  return res.json({ status: 'CONNECTED', providerName: storage.name });
+  const configured =
+    env.STORAGE_PROVIDER !== 'supabase' ||
+    Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+  res.json({
+    status: configured ? 'CONFIGURED' : 'NOT CONFIGURED',
+    providerName: storage.name,
+    note: 'Configuration only; no object was read or written to verify access.'
+  });
 });
 
-app.get('/health/queue', async (req, res) => {
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl || redisUrl.includes('localhost')) {
-    return res.json({ status: 'CONNECTED', queue: 'BullMQ Queue Manager (Local Fallback)' });
-  }
-  return res.json({ status: 'CONNECTED', queue: 'BullMQ Queue Manager (Hosted Upstash Redis)' });
+app.get('/health/processing', async (req, res) => {
+  res.json({
+    status: 'CONFIGURED',
+    mode: env.PROCESSING_MODE,
+    note:
+      env.PROCESSING_MODE === 'inline'
+        ? 'Documentation is generated in the web service; job state is persisted in the database.'
+        : 'Documentation is handed to a queue for a dedicated worker.'
+  });
 });
 
 app.get('/health/speech-provider', async (req, res) => {
-  const provider = getSpeechProvider();
-  const health = await provider.checkHealth();
+  if (env.SPEECH_PROVIDER === 'device') {
+    return res.json({
+      status: 'CONFIGURED',
+      providerName: 'DeviceSpeechProvider',
+      details:
+        'Transcription runs in the clinician browser. The server receives text only and ' +
+        'performs no speaker separation.'
+    });
+  }
+  const health = await getSpeechProvider().checkHealth();
   res.json(health);
 });
 
 app.get('/health/llm-provider', async (req, res) => {
-  const llm = getLLMProvider();
-  const health = await llm.checkHealth();
-  res.json(health);
+  try {
+    const health = await getLLMProvider().checkHealth();
+    res.json(health);
+  } catch (err: any) {
+    res.status(503).json({ status: 'CONNECTION FAILED', detail: String(err?.message ?? err).slice(0, 200) });
+  }
 });
 
-app.get('/ready', (req, res) => {
-  res.json({ status: 'READY', database: 'CONNECTED', queue: 'ONLINE' });
+app.get('/ready', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: 'READY' });
+  } catch {
+    res.status(503).json({ status: 'NOT READY', reason: 'database unreachable' });
+  }
 });
 
 // API Routes

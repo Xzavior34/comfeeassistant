@@ -2,6 +2,7 @@ import { StorageProvider } from './StorageProvider';
 import fs from 'fs';
 import path from 'path';
 import { env } from '../../config/env';
+import { createSignedLinkToken } from '../../services/signedLinks';
 
 export class LocalStorageProvider implements StorageProvider {
   name = 'LocalStorageProvider';
@@ -33,8 +34,9 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   async getSignedUrl(key: string, expiresInSeconds: number): Promise<string> {
-    const token = Buffer.from(`${key}:${Date.now() + expiresInSeconds * 1000}`).toString('base64url');
-    return `${env.APP_BASE_URL}/api/documents/secure-access?token=${token}&key=${encodeURIComponent(key)}`;
+    // HMAC-signed: the old unsigned token could be minted by anyone for any document.
+    const token = createSignedLinkToken(key, expiresInSeconds);
+    return `${env.APP_BASE_URL}/api/documents/secure-access?token=${encodeURIComponent(token)}`;
   }
 
   async delete(key: string): Promise<void> {

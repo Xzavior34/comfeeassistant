@@ -5,6 +5,19 @@ export const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || '';
 
 let authToken = localStorage.getItem('comfee_auth_token') || '';
 
+/** Reads the server's error message, preferring its explanation over a bare status. */
+async function describeError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    if (data?.fields?.length) {
+      return `${data.error}: ${data.fields.map((f: any) => `${f.field} (${f.problem})`).join(', ')}`;
+    }
+    return data?.message || data?.error || `HTTP ${res.status}`;
+  } catch {
+    return (await res.text().catch(() => '')) || res.statusText || `HTTP ${res.status}`;
+  }
+}
+
 function getAuthHeaders() {
   return {
     'Content-Type': 'application/json',
@@ -94,132 +107,87 @@ export async function recordConsent(meetingId: string, consentGranted: boolean) 
   return await res.json();
 }
 
-export async function submitTranscriptAndProcess(
+/**
+ * Submits the frozen transcript for clinical documentation.
+ *
+ * Text, not audio. The transcript was produced on the device, so nothing large is uploaded
+ * and Gemini receives only what it needs. Returns a job id: generation takes longer than an
+ * HTTP request should be held open for, so the client polls.
+ */
+export async function submitTranscript(
   meetingId: string,
-  segments: any[],
-  clinicianName: string,
+  transcriptText: string,
   clientRef: string,
   templateType: 'INITIAL_ASSESSMENT' | 'REVIEW' = 'INITIAL_ASSESSMENT',
   sessionFormat: 'FACE_TO_FACE' | 'VIRTUAL' = 'FACE_TO_FACE'
-) {
-  // Sanitize and normalize transcript segments
-  const sanitizedSegments = (segments || [])
-    .filter((s: any) => s && typeof s.text === 'string' && s.text.trim().length > 0)
-    .map((s: any, idx: number) => {
-      const start = Math.round(Math.max(0, Number(s.startTimeMs) || 0));
-      const rawEnd = Math.round(Math.max(start, Number(s.endTimeMs) || start + 1000));
-      const end = rawEnd <= start ? start + 1000 : rawEnd;
-      const confidence = typeof s.confidence === 'number' && !isNaN(s.confidence)
-        ? Math.min(1, Math.max(0, s.confidence))
-        : null;
-
-      return {
-        id: s.id || `seg-${idx + 1}`,
-        speakerId: s.speakerId && s.speakerId !== 'UNKNOWN' ? String(s.speakerId) : 'UNKNOWN',
-        mappedRole: s.mappedRole || null,
-        text: s.text.trim(),
-        rawText: s.rawText ? String(s.rawText).trim() : s.text.trim(),
-        startTimeMs: start,
-        endTimeMs: end,
-        confidence,
-        isCorrected: Boolean(s.isCorrected),
-        engineTopHypothesis: s.engineTopHypothesis ? String(s.engineTopHypothesis) : s.text.trim()
-      };
-    });
-
-  if (sanitizedSegments.length === 0) {
-    throw new Error('No final transcript was captured. Your recording has been preserved.');
-  }
-
+): Promise<{ jobId: string; status: string; pollUrl: string }> {
   const res = await fetch(`${API_BASE_URL}/api/transcripts/process`, {
     method: 'POST',
     headers: getAuthHeaders(),
-    body: JSON.stringify({
-      meetingId,
-      segments: sanitizedSegments,
-      clinicianName,
-      clientRef,
-      templateType,
-      sessionFormat
-    })
+    body: JSON.stringify({ meetingId, transcriptText, clientRef, templateType, sessionFormat })
   });
 
-  if (!res.ok) {
-    let errorText = '';
-    try {
-      const errData = await res.json();
-      errorText = errData.details
-        ? `Validation error: ${Array.isArray(errData.details) ? errData.details.join(', ') : errData.details}`
-        : errData.error || errData.message || JSON.stringify(errData);
-    } catch {
-      errorText = await res.text().catch(() => res.statusText);
-    }
-    throw new Error(errorText);
-  }
+  if (!res.ok) throw new Error(await describeError(res));
   return await res.json();
 }
 
-/**
- * Uploads the consultation recording for speaker-differentiated transcription.
- *
- * The live on-screen text comes from browser recognition, which cannot separate speakers.
- * This recording is what the diarising cloud recogniser transcribes, and that transcript is
- * what becomes the clinical record.
- */
-export async function uploadRecording(
-  meetingId: string,
-  blob: Blob,
-  mimeType: string,
-  durationMs: number,
-  sessionPhrases: string[] = []
-) {
-  const audioBase64 = await blobToBase64(blob);
+export interface JobStatus {
+  jobId: string;
+  meetingId: string;
+  state: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+  stage: string;
+  progress: number;
+  clinicalNoteId: string | null;
+  error: string | null;
+  canRetry: boolean;
+}
 
-  const res = await fetch(`${API_BASE_URL}/api/recordings/upload`, {
+export async function getJobStatus(jobId: string): Promise<JobStatus> {
+  const res = await fetch(`${API_BASE_URL}/api/transcripts/job/${jobId}`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) throw new Error(await describeError(res));
+  return await res.json();
+}
+
+/** Regenerates from the transcript already saved on the server. No re-recording. */
+export async function retryDocumentation(meetingId: string) {
+  const res = await fetch(`${API_BASE_URL}/api/transcripts/retry/${meetingId}`, {
     method: 'POST',
-    headers: getAuthHeaders(),
-    body: JSON.stringify({
-      meetingId,
-      audioBase64,
-      mimeType,
-      durationMs,
-      sessionPhrases,
-      expectedSpeakerCount: 2
-    })
+    headers: getAuthHeaders()
   });
-
-  if (!res.ok) {
-    let errorText = '';
-    try {
-      const errData = await res.json();
-      errorText = errData.error || errData.message || JSON.stringify(errData);
-    } catch {
-      errorText = await res.text().catch(() => res.statusText);
-    }
-    throw new Error(errorText);
-  }
-
+  if (!res.ok) throw new Error(await describeError(res));
   return await res.json();
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = String(reader.result || '');
-      // Strip the "data:audio/webm;base64," prefix.
-      resolve(result.slice(result.indexOf(',') + 1));
-    };
-    reader.onerror = () => reject(new Error('Could not read the recording for upload.'));
-    reader.readAsDataURL(blob);
+/** The generated draft, its review flags, and the transcript it came from. */
+export async function getReviewDraft(meetingId: string) {
+  const res = await fetch(`${API_BASE_URL}/api/reviews/${meetingId}`, { headers: getAuthHeaders() });
+  if (!res.ok) throw new Error(await describeError(res));
+  return await res.json();
+}
+
+/** Saves the clinician's edits as a new version. */
+export async function saveReviewEdits(
+  noteId: string,
+  sections: { id: string; entries: { text: string; fieldId?: string }[] }[]
+) {
+  const res = await fetch(`${API_BASE_URL}/api/reviews/${noteId}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ sections })
   });
+  if (!res.ok) throw new Error(await describeError(res));
+  return await res.json();
 }
 
 export async function approveReview(meetingId: string, approvedBy: string) {
   const res = await fetch(`${API_BASE_URL}/api/reviews/approve`, {
     method: 'POST',
     headers: getAuthHeaders(),
-    body: JSON.stringify({ meetingId, approvedBy })
+    // attested is explicit: the server refuses approval without it, so approval can never
+    // be a side effect of some other request.
+    body: JSON.stringify({ meetingId, approvedBy, attested: true })
   });
   if (!res.ok) {
     let errorText = '';

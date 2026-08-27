@@ -1,169 +1,279 @@
 /**
- * Records consultation audio in the browser alongside live speech recognition.
+ * Consultation audio capture.
  *
- * Why both. The W3C SpeechRecognition API gives immediate on-screen text, which the
- * clinician needs to see the session is working, but it returns no speaker information and
- * cannot be biased toward clinical vocabulary. A recording of the same session can be sent
- * to a recogniser that does both, and that transcript — not the live one — becomes the
- * clinical record.
+ * Independent of speech recognition by design. Recognition is a browser feature that stops
+ * and restarts on its own; the recording is the thing that must not be lost. A recognition
+ * failure never touches the recorder, and the recorder never depends on recognition working.
  *
- * So the live text is the monitor and the recording is the source of truth. They are kept
- * clearly separate to avoid the temptation to treat the on-screen text as the record.
+ * Audio capture is OPTIONAL in the free configuration. The transcript comes from on-device
+ * recognition, so a browser that cannot record still supports a complete assessment. Where
+ * recording is available it gives the clinician a fallback they can listen back to.
  */
+
+export type RecordingState =
+  | 'IDLE'
+  | 'REQUESTING_PERMISSION'
+  | 'READY'
+  | 'RECORDING'
+  | 'PAUSED'
+  | 'STOPPING'
+  | 'RECORDED'
+  | 'FAILED';
 
 export interface RecordingResult {
   blob: Blob;
   mimeType: string;
   durationMs: number;
-  /** True when the browser gave us a format a cloud recogniser accepts directly. */
-  directlyTranscribable: boolean;
+  bytes: number;
 }
 
 export interface RecorderDiagnostics {
+  state: RecordingState;
   mimeType: string | null;
-  sampleRate: number | null;
-  channelCount: number | null;
-  /** Seconds of audio captured, from the recorder rather than a wall clock. */
-  capturedSeconds: number;
+  bytesCaptured: number;
+  interruptions: number;
   errors: string[];
 }
 
 /**
- * Formats a cloud recogniser reads without a server-side transcode, best first.
- * Opus in Ogg is preferred: Google and Azure both decode it, and at 32 kbps mono it keeps
- * a full consultation small enough to upload over a clinic connection.
+ * Candidate container formats, best first.
+ *
+ * Never hard-coded: Android Chrome, desktop Chrome, Firefox and Safari each support a
+ * different subset, and assuming one produces a recorder that silently fails to start on
+ * half the devices this will actually be used on.
  */
-const PREFERRED_TYPES = [
-  'audio/ogg;codecs=opus',
+const CANDIDATE_TYPES = [
   'audio/webm;codecs=opus',
+  'audio/ogg;codecs=opus',
   'audio/webm',
-  'audio/mp4'
+  'audio/mp4;codecs=mp4a.40.2',
+  'audio/mp4',
+  'audio/aac',
+  ''
 ];
 
-function pickMimeType(): { type: string; directlyTranscribable: boolean } {
-  if (typeof MediaRecorder === 'undefined') {
-    return { type: '', directlyTranscribable: false };
-  }
-  for (const type of PREFERRED_TYPES) {
-    if (MediaRecorder.isTypeSupported(type)) {
-      return { type, directlyTranscribable: type.includes('opus') };
+export function pickSupportedMimeType(): string {
+  if (typeof MediaRecorder === 'undefined') return '';
+  for (const type of CANDIDATE_TYPES) {
+    // The empty string means "let the browser choose", which is a valid last resort.
+    if (type === '') return '';
+    try {
+      if (MediaRecorder.isTypeSupported(type)) return type;
+    } catch {
+      // Some implementations throw on unusual inputs rather than returning false.
     }
   }
-  return { type: '', directlyTranscribable: false };
+  return '';
 }
 
-export class ConsultationAudioRecorder {
+type StateListener = (state: RecordingState, detail?: string) => void;
+
+export class ConsultationRecorder {
   private recorder: MediaRecorder | null = null;
   private stream: MediaStream | null = null;
   private chunks: Blob[] = [];
-  private startedAt = 0;
-  private errors: string[] = [];
   private mimeType = '';
-  private directlyTranscribable = false;
+  private state: RecordingState = 'IDLE';
+  private startedAt = 0;
+  private accumulatedMs = 0;
+  private interruptions = 0;
+  private errors: string[] = [];
+  private listener: StateListener | null = null;
 
   static isSupported(): boolean {
     return (
       typeof MediaRecorder !== 'undefined' &&
       typeof navigator !== 'undefined' &&
-      !!navigator.mediaDevices?.getUserMedia
+      Boolean(navigator.mediaDevices?.getUserMedia)
     );
   }
 
-  async start(): Promise<void> {
-    if (!ConsultationAudioRecorder.isSupported()) {
-      throw new Error(
-        'This browser cannot record audio, so speaker identification is unavailable for this ' +
-          'session. The note will record statements as unattributed.'
-      );
+  onStateChange(listener: StateListener): void {
+    this.listener = listener;
+  }
+
+  getState(): RecordingState {
+    return this.state;
+  }
+
+  private setState(state: RecordingState, detail?: string): void {
+    this.state = state;
+    this.listener?.(state, detail);
+  }
+
+  /**
+   * Requests the microphone and prepares the recorder.
+   *
+   * Microphone permission is a browser capability, not clinical consent. Consent is recorded
+   * separately before this is ever called, and being granted the microphone never implies it.
+   */
+  async prepare(): Promise<boolean> {
+    if (!ConsultationRecorder.isSupported()) {
+      this.errors.push('MediaRecorder unavailable');
+      this.setState('FAILED', 'Audio recording is not supported in this browser.');
+      return false;
     }
 
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        // Diarisation degrades when aggressive processing removes the vocal-tract cues that
-        // distinguish two speakers, so noise suppression stays modest and gain control is
-        // left off: automatic gain equalises two voices at different distances from the
-        // microphone, which is exactly the difference the recogniser separates them by.
-        echoCancellation: true,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-        sampleRate: 16000
-      }
-    });
+    this.setState('REQUESTING_PERMISSION');
 
-    const picked = pickMimeType();
-    this.mimeType = picked.type;
-    this.directlyTranscribable = picked.directlyTranscribable;
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        // Requested, not assumed: browsers differ in which of these they honour, and an
+        // unsupported constraint is ignored rather than failing the request.
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1
+        }
+      });
+    } catch (err: any) {
+      const name = err?.name ?? 'UnknownError';
+      this.errors.push(name);
+      this.setState(
+        'FAILED',
+        name === 'NotAllowedError'
+          ? 'Microphone access was denied.'
+          : name === 'NotFoundError'
+            ? 'No microphone was found on this device.'
+            : `Microphone unavailable (${name}).`
+      );
+      return false;
+    }
 
-    this.recorder = new MediaRecorder(
-      this.stream,
-      picked.type ? { mimeType: picked.type, audioBitsPerSecond: 32000 } : undefined
-    );
+    this.mimeType = pickSupportedMimeType();
+    this.setState('READY');
+    return true;
+  }
+
+  start(): boolean {
+    if (!this.stream) {
+      this.setState('FAILED', 'Recorder was not prepared.');
+      return false;
+    }
+
+    try {
+      this.recorder = new MediaRecorder(
+        this.stream,
+        this.mimeType ? { mimeType: this.mimeType, audioBitsPerSecond: 32000 } : undefined
+      );
+    } catch (err: any) {
+      this.errors.push(String(err?.name ?? err));
+      this.setState('FAILED', 'The browser refused to start recording in any supported format.');
+      return false;
+    }
 
     this.chunks = [];
-    this.errors = [];
+    this.accumulatedMs = 0;
 
     this.recorder.ondataavailable = (e: BlobEvent) => {
       if (e.data && e.data.size > 0) this.chunks.push(e.data);
     };
 
     this.recorder.onerror = (e: any) => {
-      this.errors.push(String(e?.error?.name ?? e?.error ?? 'recorder error'));
+      this.errors.push(String(e?.error?.name ?? 'recorder error'));
+      // Data captured so far is retained; a mid-session error must not discard it.
+      this.setState('FAILED', 'Audio recording stopped unexpectedly. The transcript is unaffected.');
     };
 
-    // A timeslice means a crash or a closed laptop loses one second, not the consultation.
+    // A one-second timeslice means an interruption costs at most a second of audio, rather
+    // than the whole consultation sitting unflushed in the recorder.
     this.recorder.start(1000);
     this.startedAt = Date.now();
+    this.setState('RECORDING');
+    return true;
   }
 
-  async stop(): Promise<RecordingResult> {
-    if (!this.recorder) {
-      throw new Error('Recorder was not started.');
+  pause(): void {
+    if (this.recorder?.state === 'recording') {
+      this.recorder.pause();
+      this.accumulatedMs += Date.now() - this.startedAt;
+      this.setState('PAUSED');
     }
+  }
 
-    const durationMs = Date.now() - this.startedAt;
+  resume(): void {
+    if (this.recorder?.state === 'paused') {
+      this.recorder.resume();
+      this.startedAt = Date.now();
+      this.setState('RECORDING');
+    }
+  }
 
-    const blob: Blob = await new Promise((resolve) => {
-      this.recorder!.onstop = () => {
+  /** Records that the tab was backgrounded or the device locked, for the diagnostics report. */
+  noteInterruption(): void {
+    this.interruptions++;
+  }
+
+  /**
+   * Stops and assembles the recording.
+   *
+   * Waits for the final `dataavailable` event before assembling. Resolving early is how a
+   * recording loses its last seconds — or, if `stop()` never fires `onstop` because the
+   * recorder is already dead, hangs forever; hence the timeout fallback.
+   */
+  async stop(): Promise<RecordingResult | null> {
+    if (!this.recorder) return null;
+    this.setState('STOPPING');
+
+    const durationMs = this.accumulatedMs + (this.recorder.state === 'recording' ? Date.now() - this.startedAt : 0);
+
+    const blob = await new Promise<Blob>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
         resolve(new Blob(this.chunks, { type: this.mimeType || 'audio/webm' }));
       };
+
+      this.recorder!.onstop = finish;
+      // Never hang the End Assessment flow on a recorder that will not emit onstop.
+      setTimeout(finish, 4000);
+
       try {
-        this.recorder!.stop();
+        if (this.recorder!.state !== 'inactive') this.recorder!.stop();
+        else finish();
       } catch {
-        resolve(new Blob(this.chunks, { type: this.mimeType || 'audio/webm' }));
+        finish();
       }
     });
 
+    this.releaseStream();
+    this.setState('RECORDED');
+
+    // A zero-byte recording is reported as absent rather than uploaded as an empty file.
+    if (blob.size === 0) {
+      this.errors.push('empty recording');
+      return null;
+    }
+
+    return { blob, mimeType: this.mimeType || 'audio/webm', durationMs, bytes: blob.size };
+  }
+
+  /** Abandons the recording without keeping the audio, e.g. when consent is withdrawn. */
+  discard(): void {
+    this.chunks = [];
+    this.releaseStream();
+    this.recorder = null;
+    this.setState('IDLE');
+  }
+
+  private releaseStream(): void {
+    // Releasing the tracks is what turns the browser's recording indicator off. Leaving them
+    // open looks, correctly, like the microphone is still live.
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
-
-    return {
-      blob,
-      mimeType: this.mimeType || 'audio/webm',
-      durationMs,
-      directlyTranscribable: this.directlyTranscribable
-    };
   }
 
   getDiagnostics(): RecorderDiagnostics {
-    const track = this.stream?.getAudioTracks()[0];
-    const settings = track?.getSettings?.();
     return {
+      state: this.state,
       mimeType: this.mimeType || null,
-      sampleRate: settings?.sampleRate ?? null,
-      channelCount: settings?.channelCount ?? null,
-      capturedSeconds: this.startedAt ? (Date.now() - this.startedAt) / 1000 : 0,
+      bytesCaptured: this.chunks.reduce((n, c) => n + c.size, 0),
+      interruptions: this.interruptions,
       errors: [...this.errors]
     };
   }
-
-  /** Discards captured audio without uploading it. Used when consent is withdrawn. */
-  discard(): void {
-    this.chunks = [];
-    this.stream?.getTracks().forEach((t) => t.stop());
-    this.stream = null;
-    this.recorder = null;
-  }
 }
 
-export const consultationRecorder = new ConsultationAudioRecorder();
+export const consultationRecorder = new ConsultationRecorder();

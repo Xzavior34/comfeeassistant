@@ -48,6 +48,15 @@ export class QueueManager {
     return this.queue !== null;
   }
 
+  /**
+   * Queue-mode entry point for documentation generation. Present so the interface exists for
+   * a future paid deployment; the free MVP runs the same pipeline inline instead.
+   */
+  async enqueueDocumentationJob(jobId: string, input: unknown) {
+    if (!this.queue) throw new Error('[QueueManager] No queue available for documentation job.');
+    return this.queue.add('generate-documentation', { jobId, input });
+  }
+
   async enqueueMeetingJob(
     meetingId: string,
     audioUri: string,

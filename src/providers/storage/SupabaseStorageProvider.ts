@@ -1,6 +1,7 @@
 import { StorageProvider } from './StorageProvider';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { env } from '../../config/env';
+import { createSignedLinkToken } from '../../services/signedLinks';
 
 export class SupabaseStorageProvider implements StorageProvider {
   name = 'SupabaseStorageProvider';
@@ -48,9 +49,8 @@ export class SupabaseStorageProvider implements StorageProvider {
 
   async getSignedUrl(key: string, expiresInSeconds: number): Promise<string> {
     if (!this.supabase) {
-      const baseUrl = env.APP_BASE_URL;
-      const token = Buffer.from(`${key}:${Date.now() + expiresInSeconds * 1000}`).toString('base64url');
-      return `${baseUrl}/api/documents/secure-access?token=${token}&key=${encodeURIComponent(key)}`;
+      const token = createSignedLinkToken(key, expiresInSeconds);
+      return `${env.APP_BASE_URL}/api/documents/secure-access?token=${encodeURIComponent(token)}`;
     }
 
     const { data, error } = await this.supabase.storage
