@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../../config/env';
 import { ModelClient } from '../../clinical/extractionEngine';
-import { resolveAvailableModel } from './GeminiLLMProvider';
+import { resolveAvailableModel, resetModelCache, DiscoveredModelInfo } from './GeminiLLMProvider';
 
 /**
  * The text-only model client the clinical pipeline runs on.
@@ -14,7 +14,7 @@ import { resolveAvailableModel } from './GeminiLLMProvider';
 
 export class GeminiModelClient implements ModelClient {
   name = 'gemini';
-  private resolvedModel: string | null = null;
+  private resolvedModelInfo: DiscoveredModelInfo | null = null;
 
   async generate(systemInstruction: string, userContent: string): Promise<string> {
     const apiKey = env.LLM_API_KEY || process.env.GEMINI_API_KEY;
@@ -25,13 +25,18 @@ export class GeminiModelClient implements ModelClient {
       );
     }
 
-    if (!this.resolvedModel) {
-      this.resolvedModel = await resolveAvailableModel(apiKey, env.GEMINI_MODEL);
+    if (!this.resolvedModelInfo) {
+      this.resolvedModelInfo = await resolveAvailableModel(apiKey, env.GEMINI_MODEL);
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: this.resolvedModel,
+    console.log(
+      `[gemini] Executing generateContent using model="${this.resolvedModelInfo.modelName}" ` +
+        `(method: ${this.resolvedModelInfo.selectionMethod}, explicit: ${this.resolvedModelInfo.isExplicit}).`
+    );
+
+    let genAI = new GoogleGenerativeAI(apiKey);
+    let model = genAI.getGenerativeModel({
+      model: this.resolvedModelInfo.modelName,
       systemInstruction,
       generationConfig: {
         responseMimeType: 'application/json',
@@ -42,15 +47,41 @@ export class GeminiModelClient implements ModelClient {
       }
     });
 
-    return this.callWithRetries(model, userContent);
+    try {
+      return await this.callWithRetries(model, userContent);
+    } catch (err: any) {
+      // If a 404 occurs on a dynamically discovered model, invalidate cache and rediscover once.
+      const status = err?.status ?? err?.response?.status;
+      const message = String(err?.message ?? err);
+      const is404 = status === 404 || /404|not found|is not available/i.test(message);
+
+      if (is404 && !this.resolvedModelInfo.isExplicit) {
+        console.warn(
+          `[gemini] Model "${this.resolvedModelInfo.modelName}" returned 404. Invalidating cache and re-discovering.`
+        );
+        resetModelCache();
+        this.resolvedModelInfo = await resolveAvailableModel(apiKey, env.GEMINI_MODEL, true);
+
+        if (this.resolvedModelInfo) {
+          model = genAI.getGenerativeModel({
+            model: this.resolvedModelInfo.modelName,
+            systemInstruction,
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0,
+              topP: 0.1,
+              maxOutputTokens: 32768
+            }
+          });
+          return await this.callWithRetries(model, userContent);
+        }
+      }
+      throw err;
+    }
   }
 
   /**
-   * Handles the failure modes that actually occur, with clinician-readable messages.
-   *
-   * Rate limiting is the common one on a free-tier key and is genuinely transient, so it is
-   * retried with backoff. A safety refusal or a missing model is not transient and is
-   * reported immediately rather than burning retries.
+   * Handles the failure modes that actually occur, with safe server diagnostics and clinician-readable messages.
    */
   private async callWithRetries(model: any, userContent: string, maxAttempts = 3): Promise<string> {
     let lastError: any;
@@ -79,28 +110,47 @@ export class GeminiModelClient implements ModelClient {
         const message = String(err?.message ?? err);
         const status = err?.status ?? err?.response?.status;
 
-        const rateLimited = status === 429 || /rate limit|quota|RESOURCE_EXHAUSTED/i.test(message);
-        const transient = status === 503 || status === 500 || /timeout|ETIMEDOUT|ECONNRESET|overloaded/i.test(message);
+        const isAuth = status === 401 || status === 403 || /API_KEY_INVALID|PERMISSION_DENIED|unauthorized/i.test(message);
+        const isRateLimited = status === 429 || /rate limit|quota|RESOURCE_EXHAUSTED/i.test(message);
+        const isNotFound = status === 404 || /not found|is not available/i.test(message);
+        const isTransient = status === 503 || status === 500 || /timeout|ETIMEDOUT|ECONNRESET|overloaded/i.test(message);
+
+        console.warn(
+          `[gemini] Provider error (attempt ${attempt}/${maxAttempts}): ` +
+            `HTTP ${status || 'N/A'}, category=${
+              isAuth
+                ? 'AUTH'
+                : isRateLimited
+                ? 'RATE_LIMIT'
+                : isNotFound
+                ? 'MODEL_NOT_FOUND'
+                : isTransient
+                ? 'PROVIDER_5XX'
+                : 'OTHER'
+            }, message="${message.slice(0, 150)}"`
+        );
 
         if (/declined to process this transcript/.test(message)) throw err;
 
-        if (status === 404) {
-          // The configured model is gone. Re-resolve once rather than failing the whole run.
-          this.resolvedModel = null;
+        if (isAuth) {
           throw new Error(
-            'The configured Gemini model is not available to this API key. Leave GEMINI_MODEL ' +
-              'unset so the server can select an available model automatically.'
+            `Gemini API authentication or permission failed (HTTP ${status || 403}). Check GEMINI_API_KEY environment variable.`
           );
         }
 
-        if (!(rateLimited || transient) || attempt === maxAttempts) break;
+        if (isNotFound) {
+          if (this.resolvedModelInfo?.isExplicit) {
+            throw new Error(
+              `Configured GEMINI_MODEL "${this.resolvedModelInfo.modelName}" is not available to this API key (HTTP 404). Update or unset GEMINI_MODEL.`
+            );
+          }
+          throw err; // Allow parent to trigger re-discovery once
+        }
 
-        // Free-tier rate limits reset over tens of seconds, so back off meaningfully.
-        const waitMs = rateLimited ? Math.min(30000, 4000 * attempt) : 1000 * attempt;
-        console.warn(
-          `[gemini] Attempt ${attempt}/${maxAttempts} failed (${rateLimited ? 'rate limited' : 'transient'}); ` +
-            `retrying in ${waitMs}ms.`
-        );
+        if (!(isRateLimited || isTransient) || attempt === maxAttempts) break;
+
+        const waitMs = isRateLimited ? Math.min(30000, 4000 * attempt) : 1000 * attempt;
+        console.warn(`[gemini] Retrying in ${waitMs}ms...`);
         await new Promise((r) => setTimeout(r, waitMs));
       }
     }
@@ -112,7 +162,7 @@ export class GeminiModelClient implements ModelClient {
           'saved — retry documentation generation in a few minutes.'
       );
     }
-    throw new Error(`The clinical model could not be reached: ${message}`);
+    throw new Error(`The clinical model could not be reached: ${message.slice(0, 200)}`);
   }
 }
 

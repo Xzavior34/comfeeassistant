@@ -16,75 +16,143 @@ import {
   TranscriptCorrection
 } from '../../services/clinicalPasses';
 
+export interface DiscoveredModelInfo {
+  modelName: string;
+  isExplicit: boolean;
+  selectionMethod: 'explicit' | 'dynamic_discovered' | 'fallback_selected';
+  eligibleModelsCount: number;
+}
+
 /** Model families acceptable for clinical drafting, in order of preference. */
 const MODEL_PREFERENCE = [
-  'gemini-2.5-pro',
-  'gemini-2.5-flash',
   'gemini-2.0-flash',
+  'gemini-1.5-flash',
   'gemini-1.5-pro',
-  'gemini-1.5-flash'
+  'gemini-2.5-flash',
+  'gemini-2.0-flash-lite'
 ];
 
-let resolvedModelCache: string | null = null;
+let resolvedModelCache: DiscoveredModelInfo | null = null;
+
+export async function testMinimalModelGeneration(apiKey: string, modelName: string): Promise<boolean> {
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: { responseMimeType: 'application/json' }
+    });
+    const result = await model.generateContent('Return JSON: {"status":"ok"}');
+    const text = result.response?.text?.();
+    return Boolean(text && text.includes('ok'));
+  } catch (err: any) {
+    console.warn(`[gemini] Minimal test failed for "${modelName}": ${err?.message || err}`);
+    return false;
+  }
+}
 
 /**
  * Picks a model that the API key can actually use.
  *
- * The repository history shows five successive commits hard-coding a different Gemini
- * model to chase 404s, ending on "gemini-3.6-flash", which does not exist, while
- * render.yaml pins the retired "gemini-1.5-pro". Every extraction therefore failed in
- * production. Resolving against the live ListModels response removes that whole class of
- * outage: the configured model is used when it is genuinely available, otherwise the best
- * available supported model is chosen and logged.
+ * When GEMINI_MODEL is explicitly set in the environment, that exact model is attempted.
+ * When GEMINI_MODEL is unset (undefined or empty), dynamic discovery queries the live
+ * Google AI Studio /v1beta/models endpoint for models available to THIS key, filtering for
+ * generateContent capability and structured JSON suitability.
  */
-export async function resolveAvailableModel(apiKey: string, configured: string): Promise<string> {
-  if (resolvedModelCache) return resolvedModelCache;
+export async function resolveAvailableModel(
+  apiKey: string,
+  configuredModel?: string,
+  forceRefresh = false
+): Promise<DiscoveredModelInfo> {
+  if (resolvedModelCache && !forceRefresh) return resolvedModelCache;
 
+  const isExplicit = Boolean(configuredModel && configuredModel.trim().length > 0);
+
+  if (isExplicit) {
+    const explicitName = configuredModel!.trim().replace(/^models\//, '');
+    const info: DiscoveredModelInfo = {
+      modelName: explicitName,
+      isExplicit: true,
+      selectionMethod: 'explicit',
+      eligibleModelsCount: 1
+    };
+    resolvedModelCache = info;
+    return info;
+  }
+
+  // GEMINI_MODEL is UNSET -> Perform dynamic discovery
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
     );
-    if (!res.ok) throw new Error(`ListModels HTTP ${res.status}`);
-
-    const data: any = await res.json();
-    const usable: string[] = (data.models ?? [])
-      .filter((m: any) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
-      .map((m: any) => String(m.name).replace(/^models\//, ''));
-
-    if (usable.length === 0) throw new Error('No models support generateContent for this key');
-
-    if (usable.includes(configured)) {
-      resolvedModelCache = configured;
-      return configured;
+    if (!res.ok) {
+      console.warn(`[gemini] ListModels returned HTTP ${res.status}`);
+      throw new Error(`ListModels HTTP ${res.status}`);
     }
 
-    for (const preferred of MODEL_PREFERENCE) {
-      const match = usable.find((m) => m === preferred) ?? usable.find((m) => m.startsWith(preferred));
+    const data: any = await res.json();
+    const rawModels: any[] = Array.isArray(data?.models) ? data.models : [];
+
+    const candidateModels: string[] = rawModels
+      .filter((m: any) => {
+        const methods = Array.isArray(m.supportedGenerationMethods) ? m.supportedGenerationMethods : [];
+        if (!methods.includes('generateContent')) return false;
+
+        const name = String(m.name || '').toLowerCase();
+        if (name.includes('embedding') || name.includes('imagen') || name.includes('bison') || name.includes('gemini-1.0')) {
+          return false;
+        }
+        return true;
+      })
+      .map((m: any) => String(m.name).replace(/^models\//, ''));
+
+    if (candidateModels.length === 0) {
+      throw new Error('No compatible Gemini models supporting generateContent are available for this API key');
+    }
+
+    let selected: string | null = null;
+    let method: 'dynamic_discovered' | 'fallback_selected' = 'dynamic_discovered';
+
+    for (const pref of MODEL_PREFERENCE) {
+      const match = candidateModels.find((m) => m === pref) ?? candidateModels.find((m) => m.startsWith(pref));
       if (match) {
-        console.warn(
-          `[GeminiLLMProvider] Configured model "${configured}" is not available to this API key. ` +
-            `Falling back to "${match}". Update GEMINI_MODEL to silence this warning.`
-        );
-        resolvedModelCache = match;
-        return match;
+        selected = match;
+        break;
       }
     }
 
-    const fallback = usable[0];
-    console.warn(
-      `[GeminiLLMProvider] Configured model "${configured}" unavailable and no preferred model matched. Using "${fallback}".`
+    if (!selected) {
+      selected = candidateModels[0];
+      method = 'fallback_selected';
+    }
+
+    console.log(
+      `[gemini] Dynamic discovery found ${candidateModels.length} eligible model(s). Selected "${selected}" (method: ${method}).`
     );
-    resolvedModelCache = fallback;
-    return fallback;
+
+    const info: DiscoveredModelInfo = {
+      modelName: selected,
+      isExplicit: false,
+      selectionMethod: method,
+      eligibleModelsCount: candidateModels.length
+    };
+
+    resolvedModelCache = info;
+    return info;
   } catch (err: any) {
-    console.warn(
-      `[GeminiLLMProvider] Could not enumerate models (${err?.message ?? err}); using configured "${configured}".`
-    );
-    return configured;
+    const msg = String(err?.message ?? err);
+    console.warn(`[gemini] Dynamic model discovery failed (${msg}); defaulting to "gemini-1.5-flash".`);
+    const info: DiscoveredModelInfo = {
+      modelName: 'gemini-1.5-flash',
+      isExplicit: false,
+      selectionMethod: 'fallback_selected',
+      eligibleModelsCount: 0
+    };
+    resolvedModelCache = info;
+    return info;
   }
 }
 
-/** Reset the memoised model choice. Used by tests and after a key rotation. */
+/** Reset the memoised model choice. Used by tests and after errors. */
 export function resetModelCache(): void {
   resolvedModelCache = null;
 }
@@ -243,12 +311,12 @@ export class GeminiLLMProvider implements LLMProvider {
 
       const data: any = await response.json();
       const availableModels: string[] = (data.models ?? []).map((m: any) => m.name);
-      const active = await resolveAvailableModel(apiKey, env.GEMINI_MODEL);
+      const activeInfo = await resolveAvailableModel(apiKey, env.GEMINI_MODEL);
 
       return {
         status: 'CONNECTED',
         providerName: this.name,
-        details: `Active model: ${active}${active === env.GEMINI_MODEL ? '' : ` (configured "${env.GEMINI_MODEL}" unavailable)`}`,
+        details: `Active model: ${activeInfo.modelName} (method: ${activeInfo.selectionMethod}, eligible: ${activeInfo.eligibleModelsCount})`,
         availableModels
       };
     } catch (err: any) {
@@ -372,7 +440,8 @@ export class GeminiLLMProvider implements LLMProvider {
       throw new Error('[GeminiLLMProvider] Missing LLM_API_KEY / GEMINI_API_KEY.');
     }
 
-    const modelName = await resolveAvailableModel(apiKey, env.GEMINI_MODEL);
+    const modelInfo = await resolveAvailableModel(apiKey, env.GEMINI_MODEL);
+    const modelName = modelInfo.modelName;
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: modelName,
