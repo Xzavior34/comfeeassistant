@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../../config/env';
 import { ModelClient } from '../../clinical/extractionEngine';
 import { resolveAvailableModel, resetModelCache, DiscoveredModelInfo } from './GeminiLLMProvider';
+import { OpenRouterModelClient } from './OpenRouterLLMProvider';
 
 /**
  * The text-only model client the clinical pipeline runs on.
@@ -185,7 +186,22 @@ export class GeminiModelClient implements ModelClient {
 let cached: ModelClient | null = null;
 
 export function getClinicalModelClient(): ModelClient {
-  if (!cached) cached = new GeminiModelClient();
+  if (cached) return cached;
+
+  if (env.LLM_PROVIDER === 'openrouter') {
+    const apiKey = env.OPENROUTER_API_KEY || env.LLM_API_KEY || process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        'The clinical language model is not configured on this server (missing OPENROUTER_API_KEY). ' +
+          'The transcript has been saved; documentation can be generated once it is configured.'
+      );
+    }
+    const modelName = env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
+    cached = new OpenRouterModelClient(apiKey, modelName);
+    return cached;
+  }
+
+  cached = new GeminiModelClient();
   return cached;
 }
 
