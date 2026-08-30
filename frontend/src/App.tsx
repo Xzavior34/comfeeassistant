@@ -12,6 +12,7 @@ import {
   saveReviewEdits,
   approveReview,
   getDocumentDownloadUrl,
+  downloadDocumentBlob,
   JobStatus
 } from './services/api';
 import { liveTranscription, LiveTranscriptState, TranscriptEntry } from './services/speech';
@@ -686,22 +687,30 @@ function App() {
               <strong>Approved.</strong> This assessment note is now a finalised clinical record.
             </div>
             <div className="downloadRow">
-              <a
+              <button
                 className="downloadButton"
-                href={getDocumentDownloadUrl(noteId, 'pdf')}
-                target="_blank"
-                rel="noreferrer"
+                onClick={async () => {
+                  try {
+                    await downloadDocumentBlob(noteId, 'pdf');
+                  } catch (err: any) {
+                    alert(`Could not download PDF: ${err.message}`);
+                  }
+                }}
               >
                 Download PDF
-              </a>
-              <a
+              </button>
+              <button
                 className="downloadButton"
-                href={getDocumentDownloadUrl(noteId, 'docx')}
-                target="_blank"
-                rel="noreferrer"
+                onClick={async () => {
+                  try {
+                    await downloadDocumentBlob(noteId, 'docx');
+                  } catch (err: any) {
+                    alert(`Could not download DOCX: ${err.message}`);
+                  }
+                }}
               >
                 Download DOCX
-              </a>
+              </button>
             </div>
             <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">
               New assessment

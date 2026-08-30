@@ -270,7 +270,10 @@ export class OpenRouterLLMProvider implements LLMProvider {
     const client = new OpenRouterModelClient(apiKey, modelName);
 
     const repairNotes: string[] = [];
-    const workingSegments = await this.repairTranscript(client, segments, repairNotes);
+    // Credit Optimization: Only run transcript pre-repair pass for long or dense transcripts
+    const workingSegments = segments.length > 20
+      ? await this.repairTranscript(client, segments, repairNotes)
+      : segments;
 
     const skeleton = await new AIExtractionService().extractStructuredClinicalNote(workingSegments);
 
@@ -292,7 +295,11 @@ export class OpenRouterLLMProvider implements LLMProvider {
         const dropped: string[] = [];
         let grounded = groundClaims(merged, segmentMap, dropped);
 
-        grounded = await this.deepenNote(client, grounded, workingSegments, segmentMap, dropped);
+        // Credit Optimization: Skip optional deepening pass if primary extraction is already detailed
+        const currentDepth = measureNoteDepth(grounded);
+        if (currentDepth.totalWords < 60) {
+          grounded = await this.deepenNote(client, grounded, workingSegments, segmentMap, dropped);
+        }
 
         grounded.promptVersion = PROMPT_VERSION;
         grounded.warnings = {

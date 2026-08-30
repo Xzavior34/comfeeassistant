@@ -31,6 +31,31 @@ export function getDocumentDownloadUrl(noteId: string, format: 'pdf' | 'docx'): 
   return token ? `${url}?token=${encodeURIComponent(token)}` : url;
 }
 
+export async function downloadDocumentBlob(noteId: string, format: 'pdf' | 'docx'): Promise<void> {
+  const token = authToken || localStorage.getItem('comfee_auth_token') || '';
+  const url = `${API_BASE_URL}/api/documents/${noteId}/${format}` + (token ? `?token=${encodeURIComponent(token)}` : '');
+  
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    throw new Error(await describeError(res));
+  }
+
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = `Vabatim_Assessment_${noteId.slice(0, 8)}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+}
+
 export async function checkApiHealth() {
   try {
     const res = await fetch(`${API_BASE_URL}/health`);
