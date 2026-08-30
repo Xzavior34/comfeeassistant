@@ -321,7 +321,7 @@ function stripCodeFence(text: string): string {
   return t;
 }
 
-function unwrapRoot(parsed: any): any {
+export function unwrapRoot(parsed: any): any {
   for (const key of ['clinicalNote', 'note', 'data', 'structuredClinicalExtraction', 'output']) {
     if (parsed && typeof parsed === 'object' && parsed[key] && typeof parsed[key] === 'object') {
       return parsed[key];
@@ -335,7 +335,7 @@ function unwrapRoot(parsed: any): any {
  * roles are the system's, not the model's, and shipping the full canonical object
  * encouraged the model to echo internal metadata back as clinical content.
  */
-function transcriptForModel(segments: CanonicalTranscriptSegment[]) {
+export function transcriptForModel(segments: CanonicalTranscriptSegment[]) {
   return segments.map((s) => ({
     segmentId: s.id,
     startTimeMs: s.startTimeMs,

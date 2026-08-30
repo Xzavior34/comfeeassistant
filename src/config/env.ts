@@ -31,10 +31,12 @@ const envSchema = z.object({
   AZURE_SPEECH_KEY: z.string().optional(),
   AZURE_SPEECH_REGION: z.string().optional(),
   SPEECH_LANGUAGE: z.string().default('en-GB'),
-  LLM_PROVIDER: z.enum(['mock', 'gemini', 'openai']).default('mock'),
+  LLM_PROVIDER: z.enum(['mock', 'gemini', 'openai', 'openrouter']).default('mock'),
   LLM_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().optional(),
+  OPENROUTER_API_KEY: z.string().optional(),
+  OPENROUTER_MODEL: z.string().default('google/gemini-2.0-flash-001'),
   STORAGE_PROVIDER: z.enum(['local', 's3', 'supabase']).default('local'),
   STORAGE_LOCAL_DIR: z.string().default('./uploads'),
   SUPABASE_URL: z.string().optional(),
@@ -59,6 +61,9 @@ if (env.NODE_ENV === 'production') {
   }
   if (env.LLM_PROVIDER === 'gemini' && !(env.LLM_API_KEY || env.GEMINI_API_KEY)) {
     throw new Error('CRITICAL CONFIGURATION ERROR: LLM_PROVIDER=gemini requires GEMINI_API_KEY.');
+  }
+  if (env.LLM_PROVIDER === 'openrouter' && !(env.LLM_API_KEY || env.OPENROUTER_API_KEY)) {
+    throw new Error('CRITICAL CONFIGURATION ERROR: LLM_PROVIDER=openrouter requires OPENROUTER_API_KEY.');
   }
   if (env.SPEECH_PROVIDER === 'google' && !(env.GOOGLE_SPEECH_API_KEY || env.GOOGLE_ACCESS_TOKEN)) {
     throw new Error(
