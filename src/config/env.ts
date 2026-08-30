@@ -36,7 +36,7 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().optional(),
   OPENROUTER_API_KEY: z.string().optional(),
-  OPENROUTER_MODEL: z.string().default('google/gemini-2.0-flash-001'),
+  OPENROUTER_MODEL: z.string().default('google/gemini-2.0-flash-exp'),
   STORAGE_PROVIDER: z.enum(['local', 's3', 'supabase']).default('local'),
   STORAGE_LOCAL_DIR: z.string().default('./uploads'),
   SUPABASE_URL: z.string().optional(),

@@ -196,7 +196,7 @@ export function getClinicalModelClient(): ModelClient {
           'The transcript has been saved; documentation can be generated once it is configured.'
       );
     }
-    const modelName = env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
+    const modelName = env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp';
     cached = new OpenRouterModelClient(apiKey, modelName);
     return cached;
   }

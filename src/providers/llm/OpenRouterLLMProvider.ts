@@ -18,67 +18,96 @@ import { groundClaims, mergeModelNote, unwrapRoot, transcriptForModel } from './
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
+const OPENROUTER_DEFAULT_CANDIDATES = [
+  'google/gemini-2.0-flash-exp',
+  'google/gemini-flash-1.5',
+  'openai/gpt-4o-mini',
+  'anthropic/claude-3.5-haiku',
+  'meta-llama/llama-3.3-70b-instruct'
+];
+
 export class OpenRouterModelClient {
   public name: string;
 
   constructor(
     private apiKey: string,
-    private modelName: string = 'google/gemini-2.0-flash-001'
+    private modelName: string = 'google/gemini-2.0-flash-exp'
   ) {
     this.name = `OpenRouter:${modelName}`;
   }
 
   async generate(systemInstruction: string, userContent: string): Promise<string> {
-    const payload = {
-      model: this.modelName,
-      messages: [
-        { role: 'system', content: systemInstruction },
-        { role: 'user', content: userContent }
-      ],
-      temperature: 0,
-      top_p: 0.1,
-      response_format: { type: 'json_object' }
-    };
+    const candidates = Array.from(
+      new Set([this.modelName, ...OPENROUTER_DEFAULT_CANDIDATES].filter(Boolean))
+    );
 
     let lastError: any = null;
-    const maxAttempts = 3;
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const response = await fetch(OPENROUTER_API_URL, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://comfeeassistant.vercel.app',
-            'X-Title': 'Vabatim UK Wheelchair & Seating AI Assistant'
-          },
-          body: JSON.stringify(payload)
-        });
+    for (const candidate of candidates) {
+      const payload = {
+        model: candidate,
+        messages: [
+          { role: 'system', content: systemInstruction },
+          { role: 'user', content: userContent }
+        ],
+        temperature: 0,
+        top_p: 0.1,
+        response_format: { type: 'json_object' }
+      };
 
-        if (!response.ok) {
-          const errText = await response.text().catch(() => '');
-          const status = response.status;
-          throw new Error(`OpenRouter HTTP ${status}: ${errText.slice(0, 200)}`);
-        }
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const response = await fetch(OPENROUTER_API_URL, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${this.apiKey}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'https://comfeeassistant.vercel.app',
+              'X-Title': 'Vabatim UK Wheelchair & Seating AI Assistant'
+            },
+            body: JSON.stringify(payload)
+          });
 
-        const data: any = await response.json();
-        const content = data?.choices?.[0]?.message?.content;
-        if (!content || typeof content !== 'string') {
-          throw new Error('OpenRouter returned empty or invalid choices array');
-        }
+          if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            const status = response.status;
+            const is404 = status === 404 || /No endpoints found/i.test(errText);
 
-        return content;
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`[OpenRouter] Attempt ${attempt}/${maxAttempts} failed: ${err?.message ?? err}`);
-        if (attempt < maxAttempts) {
-          await new Promise((r) => setTimeout(r, 1000 * attempt));
+            if (is404) {
+              console.warn(
+                `[OpenRouter] Candidate model "${candidate}" returned HTTP 404 (No endpoints). Trying next candidate...`
+              );
+              lastError = new Error(`OpenRouter HTTP 404 for ${candidate}: ${errText.slice(0, 150)}`);
+              break; // Break attempt loop to try next candidate model
+            }
+
+            throw new Error(`OpenRouter HTTP ${status}: ${errText.slice(0, 200)}`);
+          }
+
+          const data: any = await response.json();
+          const content = data?.choices?.[0]?.message?.content;
+          if (!content || typeof content !== 'string') {
+            throw new Error('OpenRouter returned empty or invalid choices array');
+          }
+
+          if (this.modelName !== candidate) {
+            console.log(`[OpenRouter] Successfully verified working model "${candidate}".`);
+            this.modelName = candidate;
+            this.name = `OpenRouter:${candidate}`;
+          }
+
+          return content;
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[OpenRouter] Model "${candidate}" attempt ${attempt}/2 failed: ${err?.message ?? err}`);
+          if (attempt < 2) {
+            await new Promise((r) => setTimeout(r, 500 * attempt));
+          }
         }
       }
     }
 
-    throw lastError || new Error('OpenRouter generation failed after maximum retries');
+    throw lastError || new Error('All OpenRouter candidate models failed');
   }
 }
 
@@ -94,7 +123,7 @@ export class OpenRouterLLMProvider implements LLMProvider {
   }
 
   private getModelName(): string {
-    return env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
+    return env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp';
   }
 
   async checkHealth(): Promise<LLMHealthCheckResult> {
