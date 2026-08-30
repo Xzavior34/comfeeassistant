@@ -11,6 +11,7 @@ import {
   getReviewDraft,
   saveReviewEdits,
   approveReview,
+  getDocumentDownloadUrl,
   JobStatus
 } from './services/api';
 import { liveTranscription, LiveTranscriptState, TranscriptEntry } from './services/speech';
@@ -687,7 +688,7 @@ function App() {
             <div className="downloadRow">
               <a
                 className="downloadButton"
-                href={`${API_BASE_URL}/api/documents/${noteId}/pdf`}
+                href={getDocumentDownloadUrl(noteId, 'pdf')}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -695,7 +696,7 @@ function App() {
               </a>
               <a
                 className="downloadButton"
-                href={`${API_BASE_URL}/api/documents/${noteId}/docx`}
+                href={getDocumentDownloadUrl(noteId, 'docx')}
                 target="_blank"
                 rel="noreferrer"
               >

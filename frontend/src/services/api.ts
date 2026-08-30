@@ -25,6 +25,12 @@ function getAuthHeaders() {
   };
 }
 
+export function getDocumentDownloadUrl(noteId: string, format: 'pdf' | 'docx'): string {
+  const token = authToken || localStorage.getItem('comfee_auth_token') || '';
+  const url = `${API_BASE_URL}/api/documents/${noteId}/${format}`;
+  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
+}
+
 export async function checkApiHealth() {
   try {
     const res = await fetch(`${API_BASE_URL}/health`);
