@@ -122,6 +122,53 @@ function getConstructorName(): 'SpeechRecognition' | 'webkitSpeechRecognition' |
   return 'neither';
 }
 
+
+/** Comparison form: case, punctuation and spacing removed so only wording is compared. */
+function normaliseForCompare(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function countWords(normalised: string): number {
+  return normalised ? normalised.split(' ').filter(Boolean).length : 0;
+}
+
+/**
+ * Removes the leading part of `next` that repeats the tail of `previous`.
+ *
+ * A restart mid-sentence makes the engine re-emit the last few words it had already
+ * committed before continuing. Without this the transcript reads
+ * "...too narrow" / "too narrow and it catches my hips".
+ *
+ * Only overlaps of three words or more are trimmed: one or two shared words at a boundary
+ * happen constantly in ordinary speech and are not repetition.
+ */
+export function trimLeadingOverlap(previous: string, next: string): string {
+  const prevWords = normaliseForCompare(previous).split(' ').filter(Boolean);
+  const nextRaw = next.trim().split(/\s+/).filter(Boolean);
+  const nextWords = normaliseForCompare(next).split(' ').filter(Boolean);
+
+  if (prevWords.length < 2 || nextWords.length < 2) return next;
+
+  const maxOverlap = Math.min(prevWords.length, nextWords.length, 12);
+  // Two words is enough here because this only runs at a restart boundary. Mid-stream, where
+  // a short shared run is ordinary speech, overlap trimming is not applied at all.
+  for (let size = maxOverlap; size >= 2; size--) {
+    const tail = prevWords.slice(prevWords.length - size).join(' ');
+    const head = nextWords.slice(0, size).join(' ');
+    if (tail === head) {
+      // Drop the same number of words from the original text, preserving its punctuation.
+      const remainder = nextRaw.slice(size).join(' ').trim();
+      return remainder.length > 0 ? remainder : '';
+    }
+  }
+
+  return next;
+}
+
 export class LiveTranscriptionService {
   private recognition: any = null;
   private listening = false;
@@ -133,6 +180,15 @@ export class LiveTranscriptionService {
 
   private restartCount = 0;
   private restartAttempts = 0;
+  /**
+   * True from the moment recognition is restarted until it delivers its first result.
+   *
+   * The engine only re-delivers already-committed speech across a restart boundary. Mid-
+   * stream it never does. Knowing which of the two we are in is far more reliable than
+   * guessing from word counts, and it means ordinary repetition inside a sentence is left
+   * completely alone.
+   */
+  private justRestarted = false;
   private fatalError: string | null = null;
   private sawConfidence = false;
 
@@ -432,13 +488,7 @@ export class LiveTranscriptionService {
           : null;
       if (confidence !== null) this.sawConfidence = true;
 
-      if (this.isDuplicateOfRecent(transcript)) continue;
-
-      this.finalEntries.push({
-        text: transcript,
-        atMs: Date.now() - this.sessionStartMs,
-        confidence
-      });
+      this.commitFinal(transcript, confidence);
     }
 
     this.interimText = interim;
@@ -500,13 +550,86 @@ export class LiveTranscriptionService {
   }
 
   /** Guards against the engine re-delivering a final result it has already given us. */
-  private isDuplicateOfRecent(text: string): boolean {
-    const normalise = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
-    const candidate = normalise(text);
-    if (!candidate) return true;
+  /**
+   * Commits one final result, reconciling it against what is already in the transcript.
+   *
+   * Android Chrome ignores `continuous = true`: recognition ends after each utterance and is
+   * restarted. Around that boundary the engine commonly re-delivers what it has already
+   * given us, and often delivers a PARTIAL of an utterance and then the whole thing:
+   *
+   *     "the seat is"            <- committed
+   *     "the seat is too narrow" <- committed again
+   *
+   * Neither is an exact duplicate of the other, so exact-match de-duplication let both
+   * through. That is the repetition seen on the phone and not on the laptop, where
+   * continuous mode works and the boundary never occurs.
+   *
+   * Four cases are handled: an exact re-delivery is dropped, a fragment of something already
+   * held is dropped, an extension replaces the shorter version in place, and a new entry
+   * that begins with the tail of the previous one has that overlap trimmed.
+   */
+  private commitFinal(rawText: string, confidence: number | null): void {
+    const text = rawText.trim();
+    const candidate = normaliseForCompare(text);
+    if (!candidate) return;
 
-    return this.finalEntries.slice(-3).some((e) => normalise(e.text) === candidate);
+    const atMs = Date.now() - this.sessionStartMs;
+
+    // Re-delivery only happens across a restart boundary. Everything below is scoped to
+    // that, so speech inside a normal recognition run is never second-guessed.
+    const acrossRestart = this.justRestarted;
+    this.justRestarted = false;
+
+    const LOOKBACK = 5;
+    const start = Math.max(0, this.finalEntries.length - LOOKBACK);
+
+    for (let i = this.finalEntries.length - 1; i >= start; i--) {
+      const entry = this.finalEntries[i];
+      const existing = normaliseForCompare(entry.text);
+      if (!existing) continue;
+
+      const candidateWords = countWords(candidate);
+      const existingWords = countWords(existing);
+
+      // An exact repeat is suppressed in two situations: immediately after a restart, where
+      // the engine is re-delivering, and when a substantial phrase is repeated verbatim
+      // within seconds, which no one does in conversation.
+      //
+      // A short utterance is never suppressed. "Yes" answered to three questions is three
+      // pieces of clinical information, not one delivered three times.
+      if (existing === candidate) {
+        const withinWindow = atMs - entry.atMs <= 5000;
+        if (withinWindow && (acrossRestart || candidateWords >= 4)) return;
+        continue;
+      }
+
+      // A fragment of, or an extension of, something already captured. Substantial phrases
+      // only: short utterances are substrings of half the sentences in a consultation.
+      if (candidateWords >= 3 && existing.includes(candidate)) return;
+
+      if (existingWords >= 3 && candidate.includes(existing)) {
+        this.finalEntries[i] = { text, atMs: entry.atMs, confidence };
+        this.emit();
+        return;
+      }
+    }
+
+    let committed = text;
+
+    // Overlap trimming applies only at a restart boundary, where a repeated run of words is
+    // the engine resuming rather than the clinician speaking.
+    if (acrossRestart) {
+      const previous = this.finalEntries[this.finalEntries.length - 1];
+      if (previous) {
+        const trimmed = trimLeadingOverlap(previous.text, text);
+        if (!trimmed.trim()) return;
+        committed = trimmed;
+      }
+    }
+
+    this.finalEntries.push({ text: committed, atMs, confidence });
   }
+
 
   /**
    * Restarts recognition when the engine stops on its own.
@@ -520,7 +643,10 @@ export class LiveTranscriptionService {
     if (!this.listening || this.intentionalStop || this.fatalError) return;
 
     this.restartCount++;
-    const backoffMs = Math.min(2000, 150 * Math.pow(2, this.restartAttempts));
+    // The first restart is deliberately fast: on Android this fires after every utterance,
+    // and anything said during the gap is not heard at all. Later attempts back off, so a
+    // genuinely broken recogniser does not spin.
+    const backoffMs = this.restartAttempts === 0 ? 40 : Math.min(2000, 150 * Math.pow(2, this.restartAttempts));
     this.restartAttempts++;
     this.diagnostics.counters.restartAttempts++;
     this.notifyDiagnostics();
@@ -533,15 +659,24 @@ export class LiveTranscriptionService {
         this.diagnostics.counters.startAttempts++;
         this.notifyDiagnostics();
         this.recognition.start();
+        this.justRestarted = true;
         this.restartAttempts = 0;
       } catch {
-        if (this.restartAttempts > 6) {
+        // start() throws InvalidStateError when the engine has not finished tearing down.
+        // Android restarts after every utterance, so this happens routinely — and the
+        // previous code simply gave up here without scheduling anything, leaving recognition
+        // dead for the rest of the consultation with no error on screen. That is the
+        // instability: it worked, then quietly stopped.
+        if (this.restartAttempts > 8) {
           this.fatalError = 'restart-failed';
           this.listening = false;
           this.onStatus?.(
-            'Live transcription is unavailable in this browser. Audio recording will continue.'
+            'Live transcription stopped and could not be restarted. The transcript captured ' +
+              'so far has been kept.'
           );
+          return;
         }
+        this.handleEnd();
       }
     }, backoffMs);
   }
