@@ -8,7 +8,14 @@ export function authenticateToken(req: AuthenticatedRequest, res: Response, next
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1];
 
-  if (!token && req.query.token && typeof req.query.token === 'string') {
+  // A token in a query string is written to server access logs, browser history and the
+  // Referer header. It is accepted only for document downloads, where a browser navigation
+  // cannot carry a header, and never for the rest of the API.
+  // originalUrl, not path: this middleware runs inside a mounted router, where req.path is
+  // relative to the mount point and would never match the full route.
+  const requestPath = (req.originalUrl ?? '').split('?')[0];
+  const isDocumentDownload = /^\/api\/documents\/[^/]+\/(pdf|docx)$/.test(requestPath);
+  if (!token && isDocumentDownload && typeof req.query.token === 'string' && req.query.token) {
     token = req.query.token;
   }
 

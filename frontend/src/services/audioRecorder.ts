@@ -74,6 +74,27 @@ export function pickSupportedMimeType(): string {
 
 type StateListener = (state: RecordingState, detail?: string) => void;
 
+/**
+ * Whether this browser can record audio while speech recognition is also running.
+ *
+ * Desktop Chrome shares the microphone between getUserMedia and SpeechRecognition without
+ * complaint. Android Chrome and iOS do not: whichever grabs the microphone first keeps it,
+ * and the recogniser is left running but deaf — onstart fires, no audio ever arrives, no
+ * error is raised and the transcript stays empty. That is precisely why transcription worked
+ * on a laptop and produced nothing on a phone.
+ *
+ * On mobile the transcript wins. It is the clinical artefact; the recording is a convenience
+ * that is not even uploaded while STORE_AUDIO is false.
+ */
+export function canRecordAlongsideRecognition(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(ua);
+  // iPadOS reports a desktop UA but behaves like iOS for microphone arbitration.
+  const isIpadOs = /Macintosh/.test(ua) && typeof (navigator as any).maxTouchPoints === 'number' && (navigator as any).maxTouchPoints > 1;
+  return !isMobile && !isIpadOs;
+}
+
 export class ConsultationRecorder {
   private recorder: MediaRecorder | null = null;
   private stream: MediaStream | null = null;

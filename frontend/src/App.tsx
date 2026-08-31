@@ -11,12 +11,11 @@ import {
   getReviewDraft,
   saveReviewEdits,
   approveReview,
-  getDocumentDownloadUrl,
   downloadDocumentBlob,
   JobStatus
 } from './services/api';
 import { liveTranscription, LiveTranscriptState, TranscriptEntry } from './services/speech';
-import { consultationRecorder, ConsultationRecorder, RecordingState } from './services/audioRecorder';
+import { consultationRecorder, ConsultationRecorder, RecordingState, canRecordAlongsideRecognition } from './services/audioRecorder';
 import { sessionCheckpoint, pendingUpload } from './services/sessionCheckpoint';
 import { MetricsDashboard } from './components/MetricsDashboard';
 import './App.css';
@@ -131,7 +130,24 @@ function App() {
 
   const handleGrantConsent = async () => {
     try {
-      await recordConsent(meetingId, true);
+      const result = await recordConsent(meetingId, true);
+
+      // Only advance once the server confirms it stored the consent. Advancing optimistically
+      // is how a session reached the recording screen with no consent on record, which then
+      // surfaced as a 409 at the end of the consultation — the worst possible moment.
+      const confirmed =
+        result?.consentStatus === 'GRANTED' ||
+        result?.meeting?.consentStatus === true ||
+        result?.consentGranted === true;
+
+      if (!confirmed) {
+        alert(
+          'Consent could not be confirmed by the server, so recording has not started.\n\n' +
+            'Please try again. Starting an assessment without recorded consent is not permitted.'
+        );
+        return;
+      }
+
       setScreen('RECORDING');
     } catch (err: any) {
       alert(`Consent could not be recorded: ${err.message}`);
@@ -147,19 +163,23 @@ function App() {
 
     let recorderStartMs: number | null = null;
 
-    if (ConsultationRecorder.isSupported()) {
-      consultationRecorder.onStateChange((state, detail) => {
-        setRecorderState(state);
-        if (detail) setStatusMessage(detail);
-      });
-      const prepared = await consultationRecorder.prepare();
-      if (prepared) {
-        consultationRecorder.start();
-        recorderStartMs = Date.now();
-      }
-    } else {
-      setStatusMessage('This browser cannot record audio. The assessment will use live transcription only.');
-    }
+    // Recognition is started FIRST and, on mobile, is given the microphone exclusively.
+    //
+    // Android Chrome and iOS allow only one consumer of the microphone. Opening a
+    // getUserMedia stream for MediaRecorder before starting recognition leaves the
+    // recogniser running but deaf: it reports onstart, receives no audio, raises no error,
+    // and the transcript stays empty. Desktop Chrome shares the microphone, which is why
+    // this only ever failed on a phone.
+    const recordingAllowed = ConsultationRecorder.isSupported() && canRecordAlongsideRecognition();
+
+    // Self-heal: if recognition reports it is receiving no audio, free the microphone and
+    // retry. This covers desktop browsers that behave like mobile, and any future change in
+    // how a browser arbitrates the microphone.
+    liveTranscription.setMicContentionHandler(() => {
+      consultationRecorder.discard();
+      setRecorderState('IDLE');
+      liveTranscription.retryAfterMicRelease();
+    });
 
     const started = liveTranscription.start(
       (state) => {
@@ -183,6 +203,29 @@ function App() {
 
     if (!started) setTranscriptionAvailable(false);
     setIsListening(true);
+
+    if (recordingAllowed) {
+      consultationRecorder.onStateChange((state, detail) => {
+        setRecorderState(state);
+        if (detail) setStatusMessage(detail);
+      });
+      // Deliberately after recognition has taken the microphone, and deliberately not
+      // awaited: a slow permission prompt must not delay the start of transcription.
+      void consultationRecorder.prepare().then((prepared) => {
+        if (prepared) {
+          consultationRecorder.start();
+          recorderStartMs = Date.now();
+        }
+      });
+    } else if (!ConsultationRecorder.isSupported()) {
+      setStatusMessage('This browser cannot record audio. The assessment will use live transcription only.');
+    } else {
+      // Mobile: not an error, and worth saying plainly so nobody hunts for a broken recorder.
+      setStatusMessage(
+        'Transcribing on this device. Audio is not recorded on phones and tablets so the ' +
+          'microphone stays available to the transcriber.'
+      );
+    }
   };
 
   /**

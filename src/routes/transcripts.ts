@@ -118,10 +118,23 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
       return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
     }
 
+    // Consent is a gate, not a formality.
+    //
+    // A previous change made this endpoint set consentStatus to true whenever it found it
+    // false, to stop a 409 appearing during testing. That silently granted consent on the
+    // server for a session where nobody had recorded any, which defeats the one control
+    // standing between a recorded consultation and an unlawful one. The 409 was the system
+    // working; the cause is that the consent step did not complete, and that is what needs
+    // fixing on the client.
     if (!meeting.consentStatus) {
-      await prisma.meeting.update({
-        where: { id: meetingId },
-        data: { consentStatus: true }
+      diag.finish(409);
+      return res.status(409).json({
+        error: 'Consent not recorded',
+        message:
+          'Consent has not been recorded for this assessment, so it cannot be processed. The ' +
+          'transcript has not been discarded — record consent for this session and submit again.',
+        meetingId,
+        remedy: 'POST /api/consent with { meetingId, consentGranted: true }'
       });
     }
 

@@ -25,16 +25,12 @@ function getAuthHeaders() {
   };
 }
 
-export function getDocumentDownloadUrl(noteId: string, format: 'pdf' | 'docx'): string {
-  const token = authToken || localStorage.getItem('comfee_auth_token') || '';
-  const url = `${API_BASE_URL}/api/documents/${noteId}/${format}`;
-  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
-}
-
 export async function downloadDocumentBlob(noteId: string, format: 'pdf' | 'docx'): Promise<void> {
   const token = authToken || localStorage.getItem('comfee_auth_token') || '';
-  const url = `${API_BASE_URL}/api/documents/${noteId}/${format}` + (token ? `?token=${encodeURIComponent(token)}` : '');
-  
+  // No token in the URL. This is a fetch, so the Authorization header below authenticates it,
+  // and a JWT in a query string ends up in server access logs, browser history and Referer.
+  const url = `${API_BASE_URL}/api/documents/${noteId}/${format}`;
+
   const headers: Record<string, string> = {};
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;

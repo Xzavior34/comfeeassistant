@@ -70,6 +70,16 @@ export interface DiagnosticState {
   audio_end: boolean;
   recognition_end: boolean;
   recognition_error: string | null;
+  /**
+   * True when recognition started but never received audio.
+   *
+   * On Android Chrome and iOS the speech recogniser needs exclusive access to the
+   * microphone. If getUserMedia already holds an open stream — which MediaRecorder does —
+   * recognition starts, reports onstart, and then silently receives nothing: no
+   * onaudiostart, no results, no error. Desktop Chrome shares the microphone happily, which
+   * is exactly why this only ever showed up on a phone.
+   */
+  mic_contention: boolean;
 }
 
 export interface RecognitionDiagnostics {
@@ -156,8 +166,13 @@ export class LiveTranscriptionService {
     sound_end: false,
     audio_end: false,
     recognition_end: false,
-    recognition_error: null
+    recognition_error: null,
+    mic_contention: false
   };
+
+  /** Fires if recognition starts but no audio ever reaches it. See mic_contention. */
+  private audioWatchdog: any = null;
+  private onMicContention: (() => void) | null = null;
 
   private onUpdate: ((state: LiveTranscriptState) => void) | null = null;
   private onStatus: ((message: string) => void) | null = null;
@@ -203,7 +218,8 @@ export class LiveTranscriptionService {
       sound_end: false,
       audio_end: false,
       recognition_end: false,
-      recognition_error: null
+      recognition_error: null,
+      mic_contention: false
     };
   }
 
@@ -264,10 +280,17 @@ export class LiveTranscriptionService {
         this.diagnostics.speechOnStartTimeMs = Date.now();
         this.notifyDiagnostics();
         this.onStatus?.('Live transcription: Listening');
+
+        // Recognition says it started. If no audio reaches it within a few seconds,
+        // something else holds the microphone — on a phone, that is almost always our own
+        // MediaRecorder. Detect it rather than leaving the clinician watching an empty
+        // transcript with no error on screen.
+        this.armAudioWatchdog();
       };
 
       this.recognition.onaudiostart = () => {
         console.log('[speech] onaudiostart');
+        this.disarmAudioWatchdog();
         this.diagnostics.state = 'audio detected';
         this.diagnostics.audio_start = true;
         this.diagnostics.counters.onaudiostartEvents++;
@@ -423,6 +446,59 @@ export class LiveTranscriptionService {
     this.emit();
   }
 
+  /**
+   * Watches for the "started but deaf" state.
+   *
+   * Chrome fires onaudiostart within a few hundred milliseconds of a working microphone
+   * connection. Three seconds without it means recognition is not receiving audio at all.
+   */
+  private armAudioWatchdog(): void {
+    this.disarmAudioWatchdog();
+    this.audioWatchdog = setTimeout(() => {
+      if (!this.listening || this.diagnostics.audio_start) return;
+
+      this.diagnostics.mic_contention = true;
+      this.notifyDiagnostics();
+      this.onStatus?.(
+        'Live transcription started but is not receiving audio. Releasing the audio recorder ' +
+          'and retrying — on phones the microphone can only be used by one of them at a time.'
+      );
+      this.onMicContention?.();
+    }, 3000);
+  }
+
+  private disarmAudioWatchdog(): void {
+    if (this.audioWatchdog) {
+      clearTimeout(this.audioWatchdog);
+      this.audioWatchdog = null;
+    }
+  }
+
+  /** Registers the callback used to free the microphone when contention is detected. */
+  setMicContentionHandler(handler: (() => void) | null): void {
+    this.onMicContention = handler;
+  }
+
+  /** Restarts recognition after the microphone has been freed. */
+  retryAfterMicRelease(): void {
+    if (!this.listening || this.fatalError) return;
+    try {
+      this.recognition?.abort?.();
+    } catch {
+      // Already stopped; the restart below is what matters.
+    }
+    setTimeout(() => {
+      if (!this.listening || this.fatalError) return;
+      try {
+        this.diagnostics.mic_contention = false;
+        this.recognition.start();
+        this.armAudioWatchdog();
+      } catch {
+        // onend will drive the normal restart path.
+      }
+    }, 300);
+  }
+
   /** Guards against the engine re-delivering a final result it has already given us. */
   private isDuplicateOfRecent(text: string): boolean {
     const normalise = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
@@ -482,6 +558,7 @@ export class LiveTranscriptionService {
    * record would be inventing the one thing the engine declined to assert.
    */
   stop(): { text: string; entries: TranscriptEntry[]; discardedInterim: string } {
+    this.disarmAudioWatchdog();
     this.intentionalStop = true;
     this.listening = false;
 
