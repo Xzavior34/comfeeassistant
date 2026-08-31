@@ -52,7 +52,13 @@ export class OpenRouterModelClient {
         ],
         temperature: 0,
         top_p: 0.1,
-        response_format: { type: 'json_object' }
+        response_format: { type: 'json_object' },
+        // Without an explicit ceiling the completion is capped at whatever the model's
+        // default happens to be — commonly 4096. A full assessment extraction exceeds that,
+        // so the JSON is cut off mid-object, fails schema validation, and burns both repair
+        // attempts before failing. Truncation is billed like any other output, so this is
+        // both a reliability fix and a cost one.
+        max_tokens: 32000
       };
 
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -72,12 +78,18 @@ export class OpenRouterModelClient {
             const errText = await response.text().catch(() => '');
             const status = response.status;
             const is404 = status === 404 || /No endpoints found/i.test(errText);
+            // Not every model on OpenRouter supports response_format or the requested
+            // max_tokens. That comes back as a 400, which is just as much a "this candidate
+            // cannot serve the request" as a 404, and should move to the next one rather
+            // than aborting the consultation.
+            const isUnsupported =
+              status === 400 && /response_format|max_tokens|not support/i.test(errText);
 
-            if (is404) {
+            if (is404 || isUnsupported) {
               console.warn(
-                `[OpenRouter] Candidate model "${candidate}" returned HTTP 404 (No endpoints). Trying next candidate...`
+                `[OpenRouter] Candidate model "${candidate}" cannot serve this request (HTTP ${status}). Trying next candidate...`
               );
-              lastError = new Error(`OpenRouter HTTP 404 for ${candidate}: ${errText.slice(0, 150)}`);
+              lastError = new Error(`OpenRouter HTTP ${status} for ${candidate}: ${errText.slice(0, 150)}`);
               break; // Break attempt loop to try next candidate model
             }
 

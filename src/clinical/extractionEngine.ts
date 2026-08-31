@@ -55,8 +55,25 @@ export interface ExtractionResult {
   promptVersion: string;
 }
 
+/**
+ * Chunking defaults.
+ *
+ * The system instruction is roughly 3,250 tokens and is re-sent with every chunk, because
+ * the API is stateless. That fixed overhead, not the transcript, dominates the cost of a
+ * consultation: at a 24,000-character budget a 60-minute assessment split into three chunks
+ * paid it three times before a word of transcript was billed.
+ *
+ * 48,000 characters is roughly a 55-minute consultation, so most assessments now extract in
+ * a single call and a long one in two. The ceiling is the completion limit rather than the
+ * context window — one chunk still has to emit every fact it finds — which is why the
+ * provider now sets max_tokens explicitly.
+ *
+ * Override with EXTRACTION_CHUNK_CHARS if a deployment's model has a smaller output budget.
+ */
 const DEFAULTS = {
-  chunkCharBudget: 24000,
+  chunkCharBudget: Number(process.env.EXTRACTION_CHUNK_CHARS) > 0
+    ? Number(process.env.EXTRACTION_CHUNK_CHARS)
+    : 48000,
   chunkOverlapChars: 1200,
   maxRepairAttempts: 2
 };
