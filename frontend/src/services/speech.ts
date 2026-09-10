@@ -589,30 +589,30 @@ export class LiveTranscriptionService {
       const existing = normaliseForCompare(entry.text);
       if (!existing) continue;
 
-      const candidateWords = countWords(candidate);
-      const existingWords = countWords(existing);
-
-      // An exact repeat is suppressed in two situations: immediately after a restart, where
-      // the engine is re-delivering, and when a substantial phrase is repeated verbatim
-      // within seconds, which no one does in conversation.
+      // An exact repeat is suppressed ONLY right after a restart, within the same short
+      // window the engine actually re-delivers in — the one case where a repeat is
+      // mechanical rather than something the speaker meant.
       //
-      // A short utterance is never suppressed. "Yes" answered to three questions is three
-      // pieces of clinical information, not one delivered three times.
+      // This used to also run two looser checks against every one of the last 5 entries,
+      // restart or not: dropping a new utterance outright if an earlier one merely CONTAINED
+      // its words as a substring, and overwriting an earlier entry in place if a new one
+      // contained IT. Both were reported as real content loss with no actual repetition
+      // involved — words that were said once, correctly recognised, and never written down.
+      // The false-match rate for a loose substring check only goes up as a session runs
+      // longer: browsers restart continuous recognition periodically on their own (see
+      // handleEnd below), which is unavoidable and not a bug, but every restart was another
+      // chance for this logic to misidentify ordinary new speech as a "fragment" of
+      // something said minutes earlier purely because it shared a few words — exactly the
+      // "wasn't happening at first, then started as I went on" pattern. Removed rather than
+      // narrowed further: the one duplication path that's actually mechanical (the engine
+      // re-delivering exactly what it already gave us) is fully handled below and by
+      // trimLeadingOverlap; anything else the speaker says is now always kept.
       if (existing === candidate) {
-        const withinWindow = atMs - entry.atMs <= 5000;
-        if (withinWindow && (acrossRestart || candidateWords >= 4)) return;
+        if (acrossRestart) {
+          const withinWindow = atMs - entry.atMs <= 5000;
+          if (withinWindow) return;
+        }
         continue;
-      }
-
-      // A fragment of, or an extension of, something already captured. Substantial phrases
-      // only: short utterances are substrings of half the sentences in a consultation.
-      if (candidateWords >= 3 && existing.includes(candidate)) return;
-
-      if (existingWords >= 3 && candidate.includes(existing)) {
-        this.finalEntries[i] = { text, atMs: entry.atMs, confidence };
-        this.finalEntriesDirty = true;
-        this.emit();
-        return;
       }
     }
 
