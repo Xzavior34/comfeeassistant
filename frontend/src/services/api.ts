@@ -7,6 +7,13 @@ let authToken = localStorage.getItem('comfee_auth_token') || '';
 
 /** Reads the server's error message, preferring its explanation over a bare status. */
 async function describeError(res: Response): Promise<string> {
+  // 401/403 here always means a request that carried (or should have carried) our own
+  // Authorization header was refused. describeError is only ever called on authenticated
+  // requests (login parses its own errors separately, see below), so this is never a false
+  // positive from a plain bad-password attempt.
+  if (res.status === 401 || res.status === 403) {
+    handleAuthFailure();
+  }
   try {
     const data = await res.json();
     if (data?.fields?.length) {
@@ -23,6 +30,28 @@ function getAuthHeaders() {
     'Content-Type': 'application/json',
     ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
   };
+}
+
+/**
+ * Clears a stale token and tells the app to drop back to the login screen.
+ *
+ * Nothing used to do this: a token that had genuinely expired, or gone bad after a redeploy
+ * rotated the server's signing secret, just produced a 401/403 that surfaced as a raw error
+ * message on whatever screen the clinician was on. The stored token was never cleared, so
+ * every subsequent request failed the same way until the clinician cleared the site's
+ * storage by hand. Clearing it here, and letting App.tsx listen for this event, makes an
+ * expired session behave like a normal logout instead.
+ */
+function handleAuthFailure() {
+  authToken = '';
+  try {
+    localStorage.removeItem('comfee_auth_token');
+  } catch {
+    // Storage unavailable; nothing more to clean up.
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('vabatim:auth-expired'));
+  }
 }
 
 export async function downloadDocumentBlob(noteId: string, format: 'pdf' | 'docx'): Promise<void> {
@@ -97,16 +126,7 @@ export async function createMeeting(clientReference: string, templateType: 'INIT
       retentionPolicy: 'UK_NHS_STANDARD_8Y'
     })
   });
-  if (!res.ok) {
-    let errorText = '';
-    try {
-      const errData = await res.json();
-      errorText = errData.error || errData.message || JSON.stringify(errData);
-    } catch {
-      errorText = await res.text().catch(() => res.statusText);
-    }
-    throw new Error(errorText);
-  }
+  if (!res.ok) throw new Error(await describeError(res));
   return await res.json();
 }
 
@@ -121,16 +141,7 @@ export async function recordConsent(meetingId: string, consentGranted: boolean) 
       participantRef: 'Client-01'
     })
   });
-  if (!res.ok) {
-    let errorText = '';
-    try {
-      const errData = await res.json();
-      errorText = errData.error || errData.message || JSON.stringify(errData);
-    } catch {
-      errorText = await res.text().catch(() => res.statusText);
-    }
-    throw new Error(errorText);
-  }
+  if (!res.ok) throw new Error(await describeError(res));
   return await res.json();
 }
 
@@ -216,16 +227,7 @@ export async function approveReview(meetingId: string, approvedBy: string) {
     // be a side effect of some other request.
     body: JSON.stringify({ meetingId, approvedBy, attested: true })
   });
-  if (!res.ok) {
-    let errorText = '';
-    try {
-      const errData = await res.json();
-      errorText = errData.error || errData.message || JSON.stringify(errData);
-    } catch {
-      errorText = await res.text().catch(() => res.statusText);
-    }
-    throw new Error(errorText);
-  }
+  if (!res.ok) throw new Error(await describeError(res));
   return await res.json();
 }
 

@@ -142,6 +142,17 @@ function normalise(text: string): string {
  * A short quote must match outright. A long quote is allowed a looser test, because models
  * reliably drop a filler word mid-sentence when quoting and rejecting the whole fact for
  * that would throw away good clinical content.
+ *
+ * That looser test used to check whether 80% of the quote's words were present ANYWHERE in
+ * the whole chunk — which, at the default 48,000-character chunk budget, is most of an hour
+ * of consultation. A fabricated sentence built from ordinary clinical vocabulary ("reported",
+ * "daily", "months", "severe") only needs those words to occur somewhere in the chunk, not
+ * near each other or anywhere close to what the quote actually claims, to pass as "grounded" —
+ * this is the only grounding check the live pipeline runs (see documentationService.ts), so a
+ * loose version of it is a real fabrication risk, not a cosmetic one. The fix keeps the
+ * allowance for a dropped filler word, but requires the matched words to cluster within one
+ * bounded window of the transcript, sized to the quote itself, so they have to come from the
+ * same passage as the fact they are meant to be evidencing.
  */
 export function isQuoteGrounded(quote: string, transcript: string): boolean {
   const q = normalise(quote);
@@ -152,8 +163,18 @@ export function isQuoteGrounded(quote: string, transcript: string): boolean {
   const words = q.split(' ').filter((w) => w.length > 3);
   if (words.length < 4) return false;
 
-  const present = words.filter((w) => t.includes(w)).length;
-  return present / words.length >= 0.8;
+  const windowChars = Math.max(q.length * 2, 200);
+  const step = Math.max(1, Math.floor(windowChars / 2));
+
+  for (let start = 0; start < Math.max(t.length, 1); start += step) {
+    const window = t.slice(start, start + windowChars);
+    if (window.length === 0) break;
+    const present = words.filter((w) => window.includes(w)).length;
+    if (present / words.length >= 0.8) return true;
+    if (start + windowChars >= t.length) break;
+  }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------

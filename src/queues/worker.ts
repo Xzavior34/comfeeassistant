@@ -1,14 +1,24 @@
 import { Worker, Job } from 'bullmq';
 import { getBullMQRedisOptions } from '../config/redis';
-import { queueManager } from './queueManager';
+import { queueManager, RecognitionHints } from './queueManager';
+import { TemplateType, SessionFormat } from '../types';
 
 export const QUEUE_NAME = 'vabatim-clinical-pipeline';
 
+// Kept in sync with enqueueMeetingJob's payload in queueManager.ts. It used to only declare
+// (and forward) meetingId/audioUri/clinicianName/clientRef, silently dropping templateType,
+// sessionFormat and recognition even though the enqueue side always sent them — so a job that
+// went through the queue produced different output (default template, default session format,
+// no recognition hints) than the exact same call handled inline. Same input, same code path,
+// different result depending on whether Redis happened to be available.
 interface MeetingJobData {
   meetingId: string;
   audioUri: string;
   clinicianName: string;
   clientRef: string;
+  templateType?: TemplateType;
+  sessionFormat?: SessionFormat;
+  recognition?: RecognitionHints;
 }
 
 console.log(`[BullMQ Worker]: Starting worker for queue "${QUEUE_NAME}"...`);
@@ -23,7 +33,10 @@ export const worker = new Worker<MeetingJobData>(
       job.data.meetingId,
       job.data.audioUri,
       job.data.clinicianName,
-      job.data.clientRef
+      job.data.clientRef,
+      job.data.templateType,
+      job.data.sessionFormat,
+      job.data.recognition
     );
     console.log(`[BullMQ Worker]: Successfully completed job ${job.id} for meeting ${job.data.meetingId}`);
     return result;

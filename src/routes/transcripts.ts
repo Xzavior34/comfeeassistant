@@ -165,7 +165,9 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
       data: {
         frozenTranscript: transcript,
         frozenAt: new Date(),
-        status: 'TRANSCRIPT_READY'
+        status: 'TRANSCRIPT_READY',
+        templateType,
+        sessionFormat
       } as any
     });
 
@@ -242,14 +244,40 @@ async function retryHandler(req: AuthenticatedRequest, res: Response) {
     });
   }
 
+  // An approved note is a finalised clinical record (reviews.ts enforces the same rule
+  // before allowing approval). Regenerating it here would silently produce a second,
+  // competing draft for an assessment that is supposed to be done.
+  const latestNote = await (prisma.clinicalNote as any).findFirst({
+    where: { meetingId: meeting.id },
+    orderBy: { generatedAt: 'desc' }
+  });
+  if (latestNote && ['APPROVED', 'FINALISED', 'EXPORTED'].includes(latestNote.status)) {
+    return res.status(409).json({
+      error: 'Note already finalised',
+      message: 'This assessment has already been approved and cannot be regenerated.'
+    });
+  }
+
+  // A retry while generation is already running produced two competing draft notes for one
+  // meeting instead of replacing the run in progress. Point the caller at the existing job.
+  const existingJob = await processingJobStore.latestForMeeting(meeting.id);
+  if (existingJob && (existingJob.state === 'PENDING' || existingJob.state === 'RUNNING')) {
+    return res.status(409).json({
+      error: 'Generation already in progress',
+      message: 'Documentation is already being generated for this assessment.',
+      jobId: existingJob.id,
+      pollUrl: `/api/transcripts/job/${existingJob.id}`
+    });
+  }
+
   const { jobId } = await documentationService.start({
     meetingId: meeting.id,
     organisationId: meeting.organisationId,
     transcript,
     clinicianName: req.user!.email ?? 'Clinician',
     clientReference: meeting.clientReference,
-    templateType: 'INITIAL_ASSESSMENT',
-    sessionFormat: 'FACE_TO_FACE',
+    templateType: ((meeting as any).templateType as 'INITIAL_ASSESSMENT' | 'REVIEW') ?? 'INITIAL_ASSESSMENT',
+    sessionFormat: ((meeting as any).sessionFormat as 'FACE_TO_FACE' | 'VIRTUAL') ?? 'FACE_TO_FACE',
     actorId: req.user!.id
   });
 

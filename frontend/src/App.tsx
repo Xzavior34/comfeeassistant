@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   API_BASE_URL,
   checkApiHealth,
@@ -68,6 +68,21 @@ function App() {
 
   // Guards double submission of End Assessment, which would create two jobs.
   const endingRef = useRef(false);
+  // Keeps the screen (and the tab) awake for the duration of a long consultation. Without
+  // it, the phone locking its screen can suspend the tab outright and end the recording.
+  const wakeLockRef = useRef<any>(null);
+  // Throttles how often the diagnostics panel re-renders. onresult fires many times a
+  // second during continuous speech; re-rendering the whole app that often was a real
+  // source of the UI getting sluggish over a long session, on top of doing no good for a
+  // panel meant to be read by a person, not sampled at recognition speed.
+  const lastDiagnosticsRenderMsRef = useRef(0);
+  // Same idea for auto-scroll: a smooth-scroll call queued several times a second, for the
+  // length of a whole consultation, is wasted reflow work piling up over hours.
+  const lastScrollMsRef = useRef(0);
+  // How many final transcript entries were last written to the checkpoint. Interim results
+  // fire the onUpdate callback many times a second; checkpointing on every one of those was
+  // hammering IndexedDB for no reason. Only a new committed sentence needs to be saved.
+  const lastCheckpointedCountRef = useRef(0);
   const [speechDiagnostics, setSpeechDiagnostics] = useState<any>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -94,15 +109,57 @@ function App() {
   // told, rather than discovering a gap in the transcript later.
   useEffect(() => {
     const onVisibility = () => {
-      if (document.hidden && isListening) consultationRecorder.noteInterruption();
+      if (document.hidden && isListening) {
+        consultationRecorder.noteInterruption();
+      } else if (!document.hidden && isListening) {
+        void requestWakeLock();
+      }
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [isListening]);
 
   useEffect(() => {
+    const now = Date.now();
+    if (now - lastScrollMsRef.current < 300) return;
+    lastScrollMsRef.current = now;
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [transcript]);
+
+  // The server rejects an invalid or expired token with 401/403. api.ts clears the stored
+  // token and fires this event; previously nothing listened for it, so the clinician saw a
+  // raw "Invalid or expired token" error on whatever screen they were on and the only way
+  // back in was to manually clear the site's storage. This puts them back at login instead.
+  useEffect(() => {
+    const onAuthExpired = () => {
+      setScreen('LOGIN');
+      setStatusMessage(null);
+      alert('Your session has expired. Please sign in again.');
+    };
+    window.addEventListener('vabatim:auth-expired', onAuthExpired);
+    return () => window.removeEventListener('vabatim:auth-expired', onAuthExpired);
+  }, []);
+
+  /** Best-effort: unsupported or denied just means no wake lock, never a failure to record. */
+  const requestWakeLock = async () => {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+      }
+    } catch {
+      // Unsupported browser, or the OS declined it (e.g. low battery). Recording continues
+      // regardless; the screen may just sleep sooner than ideal.
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    try {
+      await wakeLockRef.current?.release();
+    } catch {
+      // Already released, e.g. by the OS when the tab was hidden.
+    }
+    wakeLockRef.current = null;
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,6 +217,9 @@ function App() {
     setTranscript({ finalEntries: [], interimText: '' });
     setTimerSeconds(0);
     endingRef.current = false;
+    lastCheckpointedCountRef.current = 0;
+    lastDiagnosticsRenderMsRef.current = 0;
+    void requestWakeLock();
 
     let recorderStartMs: number | null = null;
 
@@ -184,16 +244,24 @@ function App() {
     const started = liveTranscription.start(
       (state) => {
         setTranscript(state);
-        void sessionCheckpoint.save({
-          meetingId,
-          clientRef,
-          entries: state.finalEntries,
-          startedAtIso: new Date().toISOString(),
-          wasRecordingAudio: consultationRecorder.getState() === 'RECORDING'
-        });
+        if (state.finalEntries.length !== lastCheckpointedCountRef.current) {
+          lastCheckpointedCountRef.current = state.finalEntries.length;
+          void sessionCheckpoint.save({
+            meetingId,
+            clientRef,
+            entries: state.finalEntries,
+            startedAtIso: new Date().toISOString(),
+            wasRecordingAudio: consultationRecorder.getState() === 'RECORDING'
+          });
+        }
       },
       (message) => setStatusMessage(message),
       (diag) => {
+        // A fatal error is the one diagnostics change a clinician needs to see immediately;
+        // everything else can wait a moment without anyone noticing.
+        const now = Date.now();
+        if (diag.state !== 'error' && now - lastDiagnosticsRenderMsRef.current < 250) return;
+        lastDiagnosticsRenderMsRef.current = now;
         setSpeechDiagnostics({
           ...diag,
           mediaRecorderStartTimeMs: recorderStartMs
@@ -241,6 +309,7 @@ function App() {
 
     setIsListening(false);
     setStatusMessage('Finalising transcript…');
+    void releaseWakeLock();
 
     const frozen = liveTranscription.stop();
     await consultationRecorder.stop().catch(() => null);
@@ -401,12 +470,12 @@ function App() {
   const formatTimer = (sec: number) =>
     `${Math.floor(sec / 60).toString().padStart(2, '0')}:${(sec % 60).toString().padStart(2, '0')}`;
 
-  const liveText = [
-    ...transcript.finalEntries.map((e) => e.text),
-    transcript.interimText
-  ]
-    .filter(Boolean)
-    .join(' ');
+  const finalJoinedText = useMemo(
+    () => transcript.finalEntries.map((e) => e.text).join(' '),
+    [transcript.finalEntries]
+  );
+
+  const liveText = [finalJoinedText, transcript.interimText].filter(Boolean).join(' ');
 
   return (
     <div className="appContainer">
@@ -572,7 +641,7 @@ function App() {
               <h3 style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b', margin: '0 0 8px 0' }}>LIVE TRANSCRIPT</h3>
               {liveText ? (
                 <p>
-                  {transcript.finalEntries.map((e) => e.text).join(' ')}
+                  {finalJoinedText}
                   {transcript.interimText && (
                     <span style={{ opacity: 0.55 }}> {transcript.interimText}</span>
                   )}

@@ -177,6 +177,9 @@ export class LiveTranscriptionService {
 
   private finalEntries: TranscriptEntry[] = [];
   private interimText = '';
+  /** Cached copy handed out by emit(). Only rebuilt when finalEntries actually changes. */
+  private finalEntriesSnapshot: TranscriptEntry[] = [];
+  private finalEntriesDirty = false;
 
   private restartCount = 0;
   private restartAttempts = 0;
@@ -389,8 +392,6 @@ export class LiveTranscriptionService {
       };
 
       this.recognition.onresult = (event: any) => {
-        const hasFinal = Array.from(event.results || []).some((r: any) => r.isFinal);
-        console.log(`[speech] onresult interim=${!hasFinal}`);
         this.diagnostics.state = 'result received';
         this.diagnostics.result_received = true;
         this.diagnostics.counters.onresultEvents++;
@@ -609,6 +610,7 @@ export class LiveTranscriptionService {
 
       if (existingWords >= 3 && candidate.includes(existing)) {
         this.finalEntries[i] = { text, atMs: entry.atMs, confidence };
+        this.finalEntriesDirty = true;
         this.emit();
         return;
       }
@@ -628,6 +630,7 @@ export class LiveTranscriptionService {
     }
 
     this.finalEntries.push({ text: committed, atMs, confidence });
+    this.finalEntriesDirty = true;
   }
 
 
@@ -682,7 +685,11 @@ export class LiveTranscriptionService {
   }
 
   private emit(): void {
-    this.onUpdate?.({ finalEntries: [...this.finalEntries], interimText: this.interimText });
+    if (this.finalEntriesDirty) {
+      this.finalEntriesSnapshot = [...this.finalEntries];
+      this.finalEntriesDirty = false;
+    }
+    this.onUpdate?.({ finalEntries: this.finalEntriesSnapshot, interimText: this.interimText });
   }
 
   /**
@@ -746,11 +753,14 @@ export class LiveTranscriptionService {
   /** Restores a checkpointed transcript after an accidental refresh. */
   restore(entries: TranscriptEntry[]): void {
     this.finalEntries = [...entries];
+    this.finalEntriesDirty = true;
     this.emit();
   }
 
   reset(): void {
     this.finalEntries = [];
+    this.finalEntriesSnapshot = [];
+    this.finalEntriesDirty = false;
     this.interimText = '';
     this.restartCount = 0;
     this.restartAttempts = 0;

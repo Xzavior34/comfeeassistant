@@ -2,34 +2,31 @@ import { Router, Response } from 'express';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { UserRole } from '@prisma/client';
+import { prisma } from '../db';
 
 const router = Router();
 router.use(authenticateToken);
 
-router.get('/', requireRole(UserRole.ADMIN, UserRole.CLINICIAN), (req: AuthenticatedRequest, res: Response) => {
-  res.json({
-    organisationId: req.user!.organisationId,
-    auditTrail: [
-      {
-        id: 'audit-001',
-        eventType: 'AUTH_LOGIN',
-        actorId: req.user!.id,
-        resourceType: 'User',
-        resourceId: req.user!.id,
-        timestamp: new Date(Date.now() - 3600000).toISOString(),
-        recordHash: 'a7c9f82d1e0582319f0a7b4c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e'
-      },
-      {
-        id: 'audit-002',
-        eventType: 'CONSENT_GRANTED',
-        actorId: req.user!.id,
-        resourceType: 'ConsentRecord',
-        resourceId: 'demo-meeting-101',
-        timestamp: new Date(Date.now() - 3000000).toISOString(),
-        recordHash: 'b8d0e93f2a1693420a1b8c5d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f'
-      }
-    ]
-  });
+/**
+ * This used to return two hardcoded example rows, always, for every organisation — a false
+ * "audit trail" that never reflected anything that actually happened. It now reads the real,
+ * persisted AuditLog table (see auditLogger.ts), scoped to the caller's own organisation.
+ */
+router.get('/', requireRole(UserRole.ADMIN, UserRole.CLINICIAN), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
+
+    const auditTrail = await prisma.auditLog.findMany({
+      where: { organisationId: req.user!.organisationId },
+      orderBy: { timestamp: 'desc' },
+      take: limit
+    });
+
+    res.json({ organisationId: req.user!.organisationId, auditTrail });
+  } catch (error) {
+    console.error('[audit] Failed to load audit trail:', error);
+    res.status(500).json({ error: 'Failed to load audit trail.' });
+  }
 });
 
 export default router;

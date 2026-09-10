@@ -131,6 +131,9 @@ model Meeting {
   /// The frozen authoritative transcript, captured at End Assessment.
   frozenTranscript     String?
   frozenAt             DateTime?
+  /// Set when the transcript is frozen. Retry reads these back instead of assuming defaults.
+  templateType         String?             @default("INITIAL_ASSESSMENT")
+  sessionFormat        String?             @default("FACE_TO_FACE")
 }
 
 /// A documentation-generation run. Created before any work begins, so an interrupted job is
@@ -138,7 +141,7 @@ model Meeting {
 model ProcessingJob {
   id             String             @id @default(uuid())
   meetingId      String
-  meeting        Meeting            @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  meeting        Meeting            @relation(fields: [meetingId], references: [id], onDelete: Restrict)
   organisationId String
   state          ProcessingJobState @default(PENDING)
   /// Coarse progress label shown to the clinician, e.g. "Generating assessment note".
@@ -160,7 +163,7 @@ model ProcessingJob {
 model Participant {
   id               String          @id @default(uuid())
   meetingId        String
-  meeting          Meeting         @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  meeting          Meeting         @relation(fields: [meetingId], references: [id], onDelete: Restrict)
   speakerId        String          // e.g. "Speaker 1"
   role             ParticipantRole @default(OTHER)
   displayName      String?
@@ -170,7 +173,7 @@ model Participant {
 model ConsentRecord {
   id             String   @id @default(uuid())
   meetingId      String
-  meeting        Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  meeting        Meeting  @relation(fields: [meetingId], references: [id], onDelete: Restrict)
   consentVersion String
   consentStatus  String   // GRANTED | DENIED | WITHDRAWN
   policyVersion  String
@@ -183,7 +186,7 @@ model ConsentRecord {
 model Recording {
   id               String   @id @default(uuid())
   meetingId        String
-  meeting          Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  meeting          Meeting  @relation(fields: [meetingId], references: [id], onDelete: Restrict)
   objectStorageKey String
   originalFilename String
   format           String
@@ -199,7 +202,7 @@ model Recording {
 model TranscriptSegment {
   id               String        @id @default(uuid())
   meetingId        String
-  meeting          Meeting       @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  meeting          Meeting       @relation(fields: [meetingId], references: [id], onDelete: Restrict)
   startTimeMs      Int
   endTimeMs        Int
   speakerId        String        // Provided by Speech Provider Diarization
@@ -215,7 +218,7 @@ model TranscriptSegment {
 model ClinicalNote {
   id             String     @id @default(uuid())
   meetingId      String
-  meeting        Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  meeting        Meeting    @relation(fields: [meetingId], references: [id], onDelete: Restrict)
   structuredJson Json
   status         NoteStatus @default(DRAFT)
   aiModel        String

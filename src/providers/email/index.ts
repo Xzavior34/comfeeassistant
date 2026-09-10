@@ -28,10 +28,17 @@ export function getEmailProvider(): EmailProvider {
   }
 }
 
-/** True only when mail will genuinely leave the server. */
+/**
+ * True only when mail will genuinely leave the server.
+ *
+ * This used to answer "yes" for EMAIL_PROVIDER=smtp/resend whenever the matching env vars
+ * were set (SMTP_HOST/SMTP_USER, RESEND_API_KEY) — but getEmailProvider() above always
+ * returns MockEmailProvider for both, since no real adapter is bundled. An admin could set
+ * EMAIL_PROVIDER=smtp with real SMTP_HOST/SMTP_USER, have the API report delivery as
+ * "configured", and have a clinician believe a secure document link was actually emailed to a
+ * client when it was only ever written to a log line. This must answer the same question
+ * getEmailProvider() answers, not check env vars independently of what it actually returns.
+ */
 export function isEmailDeliveryConfigured(): boolean {
-  if (env.EMAIL_PROVIDER === 'mock') return false;
-  if (env.EMAIL_PROVIDER === 'smtp') return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER);
-  if (env.EMAIL_PROVIDER === 'resend') return Boolean(process.env.RESEND_API_KEY);
-  return false;
+  return !(getEmailProvider() instanceof MockEmailProvider);
 }

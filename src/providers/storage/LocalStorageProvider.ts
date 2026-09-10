@@ -40,7 +40,12 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   async delete(key: string): Promise<void> {
-    const filePath = path.join(this.storageDir, key);
+    // upload() returns keys as `file://<absolute path>`, and retrieve() strips that prefix
+    // before joining — delete() didn't, so a key round-tripped from upload() produced a
+    // bogus nested path, existsSync was false, and this silently no-op'd. RetentionService
+    // then logged "Deleted resource ... per retention policy" and counted it as deleted while
+    // the file stayed on disk indefinitely.
+    const filePath = path.join(this.storageDir, key.replace(/^file:\/\//, ''));
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }

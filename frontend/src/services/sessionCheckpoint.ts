@@ -33,8 +33,22 @@ export interface SessionCheckpoint {
   wasRecordingAudio: boolean;
 }
 
+/**
+ * Cached connection, opened once and reused.
+ *
+ * Every call used to open a brand-new IndexedDB connection and never close it. During a
+ * live consultation `save()` runs on every recognition update, including interim ones, which
+ * fire several times a second while someone is talking. Within a couple of minutes that piled
+ * up hundreds of open, never-closed connections and the tab (or the app, on a phone) ran out
+ * of resources and died — on desktop just as reliably as on mobile, since nothing about it was
+ * mobile-specific. Caching the connection is what stops the leak.
+ */
+let dbPromise: Promise<IDBDatabase | null> | null = null;
+
 function openDb(): Promise<IDBDatabase | null> {
-  return new Promise((resolve) => {
+  if (dbPromise) return dbPromise;
+
+  dbPromise = new Promise((resolve) => {
     if (typeof indexedDB === 'undefined') return resolve(null);
 
     let request: IDBOpenDBRequest;
@@ -42,6 +56,7 @@ function openDb(): Promise<IDBDatabase | null> {
       request = indexedDB.open(DB_NAME, DB_VERSION);
     } catch {
       // Private browsing and some locked-down configurations throw outright.
+      dbPromise = null;
       return resolve(null);
     }
 
@@ -51,9 +66,23 @@ function openDb(): Promise<IDBDatabase | null> {
         db.createObjectStore(STORE, { keyPath: 'meetingId' });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => resolve(null);
+    request.onsuccess = () => {
+      const db = request.result;
+      // If the connection ever closes on its own (another tab's version upgrade, or the
+      // browser reclaiming it), forget the cached handle so the next call reopens a fresh
+      // one instead of reusing a dead connection forever.
+      db.onclose = () => {
+        dbPromise = null;
+      };
+      resolve(db);
+    };
+    request.onerror = () => {
+      dbPromise = null;
+      resolve(null);
+    };
   });
+
+  return dbPromise;
 }
 
 async function withStore<T>(

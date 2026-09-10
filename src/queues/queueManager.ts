@@ -54,7 +54,14 @@ export class QueueManager {
    */
   async enqueueDocumentationJob(jobId: string, input: unknown) {
     if (!this.queue) throw new Error('[QueueManager] No queue available for documentation job.');
-    return this.queue.add('generate-documentation', { jobId, input });
+    // Without attempts/backoff, BullMQ's default is a single attempt: a transient failure
+    // (a momentary 5xx from the speech or LLM provider) failed the job permanently, with
+    // only a console log and no automatic retry or visibility that a meeting had stalled.
+    return this.queue.add(
+      'generate-documentation',
+      { jobId, input },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5000 } }
+    );
   }
 
   async enqueueMeetingJob(
@@ -67,15 +74,19 @@ export class QueueManager {
     recognition: RecognitionHints = {}
   ) {
     if (this.queue) {
-      const job = await this.queue.add('process-meeting', {
-        meetingId,
-        audioUri,
-        clinicianName,
-        clientRef,
-        templateType,
-        sessionFormat,
-        recognition
-      });
+      const job = await this.queue.add(
+        'process-meeting',
+        {
+          meetingId,
+          audioUri,
+          clinicianName,
+          clientRef,
+          templateType,
+          sessionFormat,
+          recognition
+        },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5000 } }
+      );
       console.log(`[QueueManager]: Enqueued meeting job ${job.id} for meeting ${meetingId}`);
       return job;
     } else {
