@@ -645,6 +645,23 @@ export class LiveTranscriptionService {
   private handleEnd(): void {
     if (!this.listening || this.intentionalStop || this.fatalError) return;
 
+    // The engine can end — about to restart, on Android often after every single utterance —
+    // while still holding an unfinalised hypothesis in interimText: text that was already
+    // shown on screen (as the faded, "still listening" text) but never marked final. Without
+    // this, the next recognition session's first result rebuilds interimText from scratch and
+    // simply overwrites it, so whatever was on screen a moment ago vanishes with nothing kept
+    // anywhere. That is the "I said it, I saw it written, then it disappeared" symptom for a
+    // short utterance that happened to land right at a restart boundary — nothing to do with
+    // duplication, the engine just never got to finalise it before stopping. Promoting it here
+    // means at worst it lands as its own short line instead of flowing into the sentence that
+    // follows, which is a far better outcome than losing it outright.
+    if (this.interimText.trim()) {
+      const orphaned = this.interimText;
+      this.interimText = '';
+      this.commitFinal(orphaned, null);
+      this.emit();
+    }
+
     this.restartCount++;
     // The first restart is deliberately fast: on Android this fires after every utterance,
     // and anything said during the gap is not heard at all. Later attempts back off, so a

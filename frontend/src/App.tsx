@@ -12,6 +12,8 @@ import {
   saveReviewEdits,
   approveReview,
   downloadDocumentBlob,
+  listMeetings,
+  MeetingSummary,
   JobStatus
 } from './services/api';
 import { liveTranscription, LiveTranscriptState, TranscriptEntry } from './services/speech';
@@ -20,9 +22,43 @@ import { sessionCheckpoint, pendingUpload } from './services/sessionCheckpoint';
 import { MetricsDashboard } from './components/MetricsDashboard';
 import './App.css';
 
-type Screen = 'LOGIN' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'REVIEW' | 'COMPLETED' | 'METRICS';
+type Screen = 'LOGIN' | 'DASHBOARD' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'REVIEW' | 'COMPLETED' | 'METRICS';
 type TemplateType = 'INITIAL_ASSESSMENT' | 'REVIEW';
 type SessionFormat = 'FACE_TO_FACE' | 'VIRTUAL';
+
+/** States before a transcript is frozen and submitted — the only ones "Resume" applies to. */
+const UNFINISHED_MEETING_STATES = new Set(['CREATED', 'CONSENT_PENDING', 'READY', 'RECORDING']);
+
+/**
+ * What the dashboard should offer for one past session.
+ *
+ * Priority matters: a note, once generated, is the thing to show regardless of the
+ * meeting's raw status string (which keeps moving — DOCUMENT_GENERATING, DOCUMENT_READY,
+ * DELIVERED, APPROVED — long after there is nothing left to resume or retry). A job still
+ * running beats everything else queued behind it. Only when neither exists does the
+ * meeting's own status decide between "nothing happened yet, resume it" and "processing
+ * failed, retry it".
+ */
+function describeMeetingAction(
+  m: MeetingSummary
+): { kind: 'resume' | 'progress' | 'note' | 'retry' | 'none'; label: string } {
+  if (m.latestNote) {
+    return { kind: 'note', label: `Note: ${m.latestNote.status.toLowerCase().replace(/_/g, ' ')}` };
+  }
+  if (m.latestJob && (m.latestJob.state === 'PENDING' || m.latestJob.state === 'RUNNING')) {
+    return { kind: 'progress', label: `Generating documentation — ${m.latestJob.progress}%` };
+  }
+  if (m.status === 'FAILED') {
+    return { kind: 'retry', label: 'Documentation generation failed' };
+  }
+  if (UNFINISHED_MEETING_STATES.has(m.status)) {
+    return {
+      kind: 'resume',
+      label: m.consentStatus ? 'Not finished — recording in progress' : 'Consent not yet recorded'
+    };
+  }
+  return { kind: 'none', label: m.status.replace(/_/g, ' ').toLowerCase() };
+}
 
 interface NarrativeEntry {
   text: string;
@@ -38,7 +74,7 @@ interface NarrativeSection {
 
 function App() {
   const [screen, setScreen] = useState<Screen>(
-    localStorage.getItem('comfee_auth_token') ? 'MEETINGS' : 'LOGIN'
+    localStorage.getItem('comfee_auth_token') ? 'DASHBOARD' : 'LOGIN'
   );
   const [apiHealth, setApiHealth] = useState<any>(null);
 
@@ -65,6 +101,11 @@ function App() {
   const [approving, setApproving] = useState(false);
   const [noteId, setNoteId] = useState<string>('');
   const [recovery, setRecovery] = useState<{ meetingId: string; entries: TranscriptEntry[] } | null>(null);
+
+  const [meetings, setMeetings] = useState<MeetingSummary[]>([]);
+  const [meetingsLoading, setMeetingsLoading] = useState(false);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [selectedClient, setSelectedClient] = useState<string | null>(null);
 
   // Guards double submission of End Assessment, which would create two jobs.
   const endingRef = useRef(false);
@@ -98,6 +139,23 @@ function App() {
       if (cp && cp.entries.length > 0) setRecovery({ meetingId: cp.meetingId, entries: cp.entries });
     });
   }, []);
+
+  const loadMeetings = useCallback(async () => {
+    setMeetingsLoading(true);
+    setDashboardError(null);
+    try {
+      const data = await listMeetings();
+      setMeetings(data.meetings);
+    } catch (err: any) {
+      setDashboardError(`Could not load your sessions: ${err.message}`);
+    } finally {
+      setMeetingsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (screen === 'DASHBOARD') void loadMeetings();
+  }, [screen, loadMeetings]);
 
   useEffect(() => {
     if (!isListening) return;
@@ -167,7 +225,7 @@ function App() {
     setLoggingIn(true);
     try {
       await loginClinician(clinicianEmail, clinicianPassword);
-      setScreen('MEETINGS');
+      setScreen('DASHBOARD');
     } catch (err: any) {
       alert(`Sign in failed: ${err.message}`);
     } finally {
@@ -359,8 +417,9 @@ function App() {
     }
   };
 
-  const pollJob = useCallback((jobId: string) => {
+  const pollJob = useCallback((jobId: string, forMeetingId?: string) => {
     let cancelled = false;
+    const targetMeetingId = forMeetingId || meetingId;
 
     const tick = async () => {
       if (cancelled) return;
@@ -369,7 +428,7 @@ function App() {
         setJob(status);
 
         if (status.state === 'SUCCEEDED') {
-          await openReview();
+          await openReview(targetMeetingId);
           return;
         }
         if (status.state === 'FAILED') return;
@@ -385,8 +444,18 @@ function App() {
     };
   }, [meetingId]);
 
-  const openReview = async () => {
-    const data = await getReviewDraft(meetingId);
+  /**
+   * Loads and opens a note for review.
+   *
+   * Takes an explicit meeting id rather than always trusting the `meetingId` state, because
+   * a dashboard action can open a past session's note before the state update that sets it
+   * has actually re-rendered — relying on the closure there would race and open the wrong
+   * (or a stale) meeting.
+   */
+  const openReview = async (forMeetingId?: string) => {
+    const id = forMeetingId || meetingId;
+    const data = await getReviewDraft(id);
+    setMeetingId(id);
     setDraft(data);
     setNoteId(data.noteId);
     setSections(data.narrative?.sections ?? []);
@@ -408,6 +477,99 @@ function App() {
       setStatusMessage(`Retry failed: ${err.message}`);
     }
   };
+
+  /** Prefills the create-session form for a follow-up session with an existing client. */
+  const startNewSessionFor = (clientReference: string, prefTemplate?: TemplateType, prefFormat?: SessionFormat) => {
+    setClientRef(clientReference);
+    if (prefTemplate) setTemplateType(prefTemplate);
+    if (prefFormat) setSessionFormat(prefFormat);
+    setMeetingId('');
+    setScreen('MEETINGS');
+  };
+
+  /**
+   * Resumes a session that was never finished.
+   *
+   * Consent is a hard prerequisite the server itself enforces, so a session that never got
+   * it goes back to the consent screen rather than straight to recording. Once consent is
+   * confirmed, any transcript this device still has checkpointed for that exact meeting is
+   * restored; if there is none (a different device, or the checkpoint was cleared), recording
+   * simply continues under the same session record rather than losing the link to the client
+   * and template it was created for.
+   */
+  const resumeMeeting = async (m: MeetingSummary) => {
+    setClientRef(m.clientReference);
+    setTemplateType((m.templateType as TemplateType) || 'INITIAL_ASSESSMENT');
+    setSessionFormat((m.sessionFormat as SessionFormat) || 'FACE_TO_FACE');
+    setMeetingId(m.id);
+
+    if (!m.consentStatus) {
+      setScreen('CONSENT');
+      return;
+    }
+
+    const checkpoint = await sessionCheckpoint.load(m.id);
+    if (checkpoint && checkpoint.entries.length > 0) {
+      liveTranscription.restore(checkpoint.entries);
+    } else {
+      liveTranscription.reset();
+    }
+    setTranscript(liveTranscription.getState());
+    setTimerSeconds(0);
+    setIsListening(false);
+    setScreen('RECORDING');
+  };
+
+  /** Reopens the note review screen for a past session that already has a generated note. */
+  const viewMeetingNote = async (m: MeetingSummary) => {
+    setClientRef(m.clientReference);
+    setTemplateType((m.templateType as TemplateType) || 'INITIAL_ASSESSMENT');
+    setSessionFormat((m.sessionFormat as SessionFormat) || 'FACE_TO_FACE');
+    try {
+      await openReview(m.id);
+    } catch (err: any) {
+      alert(`Could not open this assessment's note: ${err.message}`);
+    }
+  };
+
+  /** Jumps to the processing screen and resumes polling a job already in flight. */
+  const viewJobProgress = (m: MeetingSummary) => {
+    setClientRef(m.clientReference);
+    setTemplateType((m.templateType as TemplateType) || 'INITIAL_ASSESSMENT');
+    setSessionFormat((m.sessionFormat as SessionFormat) || 'FACE_TO_FACE');
+    setMeetingId(m.id);
+    setJob(null);
+    setScreen('PROCESSING');
+    if (m.latestJob) pollJob(m.latestJob.id, m.id);
+  };
+
+  /** Retries documentation generation for a past session, from its already-saved transcript. */
+  const handleRetryFromDashboard = async (m: MeetingSummary) => {
+    setClientRef(m.clientReference);
+    setTemplateType((m.templateType as TemplateType) || 'INITIAL_ASSESSMENT');
+    setSessionFormat((m.sessionFormat as SessionFormat) || 'FACE_TO_FACE');
+    setMeetingId(m.id);
+    setJob(null);
+    setScreen('PROCESSING');
+    setStatusMessage('Retrying…');
+    try {
+      const started = await retryDocumentation(m.id);
+      pollJob(started.jobId, m.id);
+    } catch (err: any) {
+      setStatusMessage(`Retry failed: ${err.message}`);
+    }
+  };
+
+  const distinctClients = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const m of meetings) counts.set(m.clientReference, (counts.get(m.clientReference) || 0) + 1);
+    return Array.from(counts.entries()).map(([clientReference, count]) => ({ clientReference, count }));
+  }, [meetings]);
+
+  const filteredMeetings = useMemo(
+    () => (selectedClient ? meetings.filter((m) => m.clientReference === selectedClient) : meetings),
+    [meetings, selectedClient]
+  );
 
   const updateEntry = (sectionId: string, index: number, text: string) => {
     setSections((prev) =>
@@ -477,6 +639,11 @@ function App() {
 
   const liveText = [finalJoinedText, transcript.interimText].filter(Boolean).join(' ');
 
+  // A note reopened from the dashboard after approval is history, not a draft: editing or
+  // re-approving it must not be offered (the server refuses re-approval anyway, but showing
+  // live edit controls on an already-finalised clinical record would be actively misleading).
+  const reviewFinalised = draft?.status === 'APPROVED' || draft?.status === 'FINALISED' || draft?.status === 'EXPORTED';
+
   return (
     <div className="appContainer">
       <header className="header">
@@ -493,7 +660,7 @@ function App() {
       </header>
 
       <main className="mainContent">
-        {recovery && screen === 'MEETINGS' && (
+        {recovery && (screen === 'DASHBOARD' || screen === 'MEETINGS') && (
           <div className="warningBanner">
             An assessment was interrupted with {recovery.entries.length} captured statements.
             The transcript can be recovered; the audio recording cannot, because the browser
@@ -548,6 +715,135 @@ function App() {
                 {loggingIn ? 'Signing in…' : 'Sign in'}
               </button>
             </form>
+          </div>
+        )}
+
+        {screen === 'DASHBOARD' && (
+          <div className="card">
+            <h2>Your sessions</h2>
+            <div className="buttonGroup" style={{ marginBottom: 20 }}>
+              <button
+                onClick={() => {
+                  setClientRef('');
+                  setMeetingId('');
+                  setScreen('MEETINGS');
+                }}
+                className="primaryButton"
+              >
+                + New session
+              </button>
+              <button onClick={() => setScreen('METRICS')} className="secondaryButton">
+                Documentation quality
+              </button>
+            </div>
+
+            {meetingsLoading && <p className="hint">Loading your sessions…</p>}
+            {dashboardError && <div className="warningBanner">{dashboardError}</div>}
+
+            {!meetingsLoading && !dashboardError && meetings.length === 0 && (
+              <p className="hint">No sessions yet. Start your first assessment above.</p>
+            )}
+
+            {meetings.length > 0 && (
+              <>
+                <h3
+                  style={{
+                    fontSize: '12px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    color: '#64748b',
+                    margin: '0 0 8px 0'
+                  }}
+                >
+                  Clients
+                </h3>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+                  <button
+                    className="secondaryButton"
+                    style={selectedClient === null ? { fontWeight: 700 } : undefined}
+                    onClick={() => setSelectedClient(null)}
+                  >
+                    All ({meetings.length})
+                  </button>
+                  {distinctClients.map((c) => (
+                    <button
+                      key={c.clientReference}
+                      className="secondaryButton"
+                      style={selectedClient === c.clientReference ? { fontWeight: 700 } : undefined}
+                      onClick={() => setSelectedClient(c.clientReference)}
+                    >
+                      {c.clientReference} ({c.count})
+                    </button>
+                  ))}
+                </div>
+
+                <h3
+                  style={{
+                    fontSize: '12px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    color: '#64748b',
+                    margin: '0 0 8px 0'
+                  }}
+                >
+                  Past sessions
+                </h3>
+                <div className="scrollBox" style={{ maxHeight: '55vh' }}>
+                  {filteredMeetings.map((m) => {
+                    const action = describeMeetingAction(m);
+                    return (
+                      <div key={m.id} className="noteItem" style={{ marginBottom: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+                          <div>
+                            <strong>{m.clientReference}</strong>
+                            <div className="hint">
+                              {m.templateType === 'REVIEW' ? 'Review / handover' : 'Initial assessment'} ·{' '}
+                              {m.sessionFormat === 'VIRTUAL' ? 'Remote' : 'In person'} ·{' '}
+                              {new Date(m.createdAt).toLocaleString()}
+                            </div>
+                            <div className="hint">{action.label}</div>
+                          </div>
+                          <div className="buttonGroup" style={{ margin: 0 }}>
+                            {action.kind === 'resume' && (
+                              <button className="primaryButton" onClick={() => void resumeMeeting(m)}>
+                                Resume
+                              </button>
+                            )}
+                            {action.kind === 'progress' && (
+                              <button className="secondaryButton" onClick={() => viewJobProgress(m)}>
+                                View progress
+                              </button>
+                            )}
+                            {action.kind === 'note' && (
+                              <button className="secondaryButton" onClick={() => void viewMeetingNote(m)}>
+                                View note
+                              </button>
+                            )}
+                            {action.kind === 'retry' && (
+                              <button className="dangerButton" onClick={() => void handleRetryFromDashboard(m)}>
+                                Retry
+                              </button>
+                            )}
+                            <button
+                              className="secondaryButton"
+                              onClick={() =>
+                                startNewSessionFor(
+                                  m.clientReference,
+                                  (m.templateType as TemplateType) || undefined,
+                                  (m.sessionFormat as SessionFormat) || undefined
+                                )
+                              }
+                            >
+                              New session for this client
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -608,7 +904,7 @@ function App() {
               <button onClick={handleGrantConsent} className="primaryButton">
                 Consent given — continue
               </button>
-              <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">
+              <button onClick={() => setScreen('DASHBOARD')} className="secondaryButton">
                 Cancel
               </button>
             </div>
@@ -734,10 +1030,16 @@ function App() {
 
         {screen === 'REVIEW' && (
           <div className="card">
-            <div className="draftNoticeBanner">
-              <strong>Assessment note generated — review required.</strong> This is a draft. It
-              becomes a clinical record only when you approve it.
-            </div>
+            {reviewFinalised ? (
+              <div className="approvedNoticeBanner">
+                <strong>Approved.</strong> This is a finalised clinical record, reopened for viewing.
+              </div>
+            ) : (
+              <div className="draftNoticeBanner">
+                <strong>Assessment note generated — review required.</strong> This is a draft. It
+                becomes a clinical record only when you approve it.
+              </div>
+            )}
 
             {draft?.reviewFlags?.length > 0 && (
               <div className="warningBanner">
@@ -764,30 +1066,69 @@ function App() {
                         style={{ flex: 1, minHeight: 60 }}
                         value={entry.text}
                         onChange={(e) => updateEntry(section.id, i, e.target.value)}
+                        readOnly={reviewFinalised}
                       />
-                      <button
-                        className="secondaryButton"
-                        onClick={() => deleteEntry(section.id, i)}
-                        aria-label="Remove this statement"
-                      >
-                        ✕
-                      </button>
+                      {!reviewFinalised && (
+                        <button
+                          className="secondaryButton"
+                          onClick={() => deleteEntry(section.id, i)}
+                          aria-label="Remove this statement"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                   ))}
-                  <button className="secondaryButton" onClick={() => addEntry(section.id)}>
-                    + Add
-                  </button>
+                  {!reviewFinalised && (
+                    <button className="secondaryButton" onClick={() => addEntry(section.id)}>
+                      + Add
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
 
             <div className="buttonGroup">
-              <button onClick={handleSaveEdits} className="secondaryButton" disabled={savingEdits}>
-                {savingEdits ? 'Saving…' : 'Save edits'}
-              </button>
-              <button onClick={handleApprove} className="successButton" disabled={approving}>
-                {approving ? 'Approving…' : 'Approve & finalise'}
-              </button>
+              {reviewFinalised ? (
+                <>
+                  <button
+                    className="downloadButton"
+                    onClick={async () => {
+                      try {
+                        await downloadDocumentBlob(noteId, 'pdf');
+                      } catch (err: any) {
+                        alert(`Could not download PDF: ${err.message}`);
+                      }
+                    }}
+                  >
+                    Download PDF
+                  </button>
+                  <button
+                    className="downloadButton"
+                    onClick={async () => {
+                      try {
+                        await downloadDocumentBlob(noteId, 'docx');
+                      } catch (err: any) {
+                        alert(`Could not download DOCX: ${err.message}`);
+                      }
+                    }}
+                  >
+                    Download DOCX
+                  </button>
+                  <button onClick={() => setScreen('DASHBOARD')} className="secondaryButton">
+                    Back to your sessions
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button onClick={handleSaveEdits} className="secondaryButton" disabled={savingEdits}>
+                    {savingEdits ? 'Saving…' : 'Save edits'}
+                  </button>
+                  <button onClick={handleApprove} className="successButton" disabled={approving}>
+                    {approving ? 'Approving…' : 'Approve & finalise'}
+                  </button>
+                </>
+              )}
             </div>
             {statusMessage && <p className="hint">{statusMessage}</p>}
           </div>
@@ -824,16 +1165,21 @@ function App() {
                 Download DOCX
               </button>
             </div>
-            <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">
-              New assessment
-            </button>
+            <div className="buttonGroup">
+              <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">
+                New assessment
+              </button>
+              <button onClick={() => setScreen('DASHBOARD')} className="secondaryButton">
+                Back to your sessions
+              </button>
+            </div>
           </div>
         )}
 
         {screen === 'METRICS' && (
           <div className="card">
             <MetricsDashboard />
-            <button onClick={() => setScreen('MEETINGS')} className="secondaryButton">
+            <button onClick={() => setScreen('DASHBOARD')} className="secondaryButton">
               Back
             </button>
           </div>

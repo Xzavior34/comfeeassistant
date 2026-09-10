@@ -113,6 +113,31 @@ export async function loginClinician(email: string, password?: string) {
   return data;
 }
 
+export interface MeetingSummary {
+  id: string;
+  clientReference: string;
+  meetingType: string;
+  templateType: 'INITIAL_ASSESSMENT' | 'REVIEW' | null;
+  sessionFormat: 'FACE_TO_FACE' | 'VIRTUAL' | null;
+  status: string;
+  consentStatus: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  frozenAt: string | null;
+  latestJob: { id: string; state: string; stage: string; progress: number } | null;
+  latestNote: { id: string; status: string } | null;
+}
+
+/** This clinician's own past sessions, newest first — the dashboard's data source. */
+export async function listMeetings(): Promise<{ meetings: MeetingSummary[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/meetings`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) throw new Error(await describeError(res));
+  return await res.json();
+}
+
 export async function createMeeting(clientReference: string, templateType: 'INITIAL_ASSESSMENT' | 'REVIEW' = 'INITIAL_ASSESSMENT', sessionFormat: 'FACE_TO_FACE' | 'VIRTUAL' = 'FACE_TO_FACE') {
   const res = await fetch(`${API_BASE_URL}/api/meetings`, {
     method: 'POST',

@@ -35,10 +35,55 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       })
       .catch(() => undefined);
 
-    const meetings = await prisma.meeting.findMany({
-      where: { organisationId: userOrgId }
+    // Scoped to the signed-in clinician: this is their own dashboard of past sessions and
+    // clients, not a shared organisation-wide list. A different clinician's client sessions
+    // are not shown here.
+    // templateType/sessionFormat were added to the schema after the last `prisma generate`
+    // in this environment could run (see the freeze step in transcripts.ts for the same,
+    // pre-existing workaround) so this whole query is typed loosely rather than fighting
+    // Prisma's generated (and here, stale) Select type for two fields it doesn't know about
+    // yet. Nothing here is unsafe: the shape is fully under our control below.
+    const meetings: any[] = await (prisma.meeting.findMany as any)({
+      where: { organisationId: userOrgId, clinicianId: req.user!.id },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        clientReference: true,
+        meetingType: true,
+        templateType: true,
+        sessionFormat: true,
+        status: true,
+        consentStatus: true,
+        createdAt: true,
+        startedAt: true,
+        completedAt: true,
+        frozenAt: true,
+        // Only enough of the latest job/note to decide what action the dashboard should
+        // offer (resume, view progress, view note, retry) — never the transcript or note
+        // content itself, which would bloat a list of every past session.
+        processingJobs: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { id: true, state: true, stage: true, progress: true }
+        },
+        clinicalNotes: {
+          orderBy: { generatedAt: 'desc' },
+          take: 1,
+          select: { id: true, status: true }
+        }
+      }
     });
-    res.json({ meetings });
+
+    const withLatest = meetings.map((m) => {
+      const { processingJobs, clinicalNotes, ...rest } = m;
+      return {
+        ...rest,
+        latestJob: (processingJobs && processingJobs[0]) ?? null,
+        latestNote: (clinicalNotes && clinicalNotes[0]) ?? null
+      };
+    });
+
+    res.json({ meetings: withLatest });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch meetings' });
   }
