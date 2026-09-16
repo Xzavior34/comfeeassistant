@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { env } from '../config/env';
 import { auditLogger } from '../services/auditLogger';
 import { prisma } from '../db';
@@ -149,6 +150,108 @@ router.post('/register', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Registration error:', error);
     return res.status(500).json({ error: 'Internal server error during registration.' });
+  }
+});
+
+/**
+ * Request password reset link / token for an account.
+ * Uniform success response is returned regardless of email existence to prevent enumeration.
+ */
+router.post('/forgot-password', async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Valid email address is required.' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+
+    let resetToken: string | null = null;
+
+    if (user) {
+      resetToken = crypto.randomBytes(32).toString('hex');
+      const resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour token validity
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { resetToken, resetTokenExpiry }
+      });
+
+      auditLogger.log({
+        organisationId: user.organisationId,
+        actorId: user.id,
+        eventType: 'AUTH_PASSWORD_RESET_REQUESTED',
+        resourceType: 'User',
+        resourceId: user.id,
+        clientIp: req.ip
+      });
+
+      console.log(`[auth] Password reset requested for ${user.email}. Token: ${resetToken}`);
+    }
+
+    return res.json({
+      message: 'If an account with that email exists, password reset instructions have been sent.',
+      ...(process.env.NODE_ENV !== 'production' && resetToken ? { debugResetToken: resetToken } : {})
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    return res.status(500).json({ error: 'Internal server error during password reset request.' });
+  }
+});
+
+/**
+ * Reset password using a valid reset token.
+ */
+router.post('/reset-password', async (req: Request, res: Response) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ error: 'Reset token is required.' });
+    }
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters long.' });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        resetToken: token,
+        resetTokenExpiry: { gt: new Date() }
+      }
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid or expired password reset token.' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        resetToken: null,
+        resetTokenExpiry: null
+      }
+    });
+
+    auditLogger.log({
+      organisationId: user.organisationId,
+      actorId: user.id,
+      eventType: 'AUTH_PASSWORD_RESET_COMPLETED',
+      resourceType: 'User',
+      resourceId: user.id,
+      clientIp: req.ip
+    });
+
+    return res.json({
+      message: 'Password has been reset successfully. You can now log in with your new password.'
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    return res.status(500).json({ error: 'Internal server error during password reset.' });
   }
 });
 

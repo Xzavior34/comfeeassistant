@@ -33,11 +33,11 @@ export class AuditLogger {
 
   constructor() {
     prisma.auditLog
-      .findFirst({ orderBy: { timestamp: 'desc' } })
-      .then((last) => {
+      ?.findFirst({ orderBy: { timestamp: 'desc' } })
+      ?.then((last) => {
         if (last?.recordHash) this.lastHash = last.recordHash;
       })
-      .catch((err) => {
+      ?.catch((err) => {
         console.error('[AuditLogger] Could not load last hash from the database, starting a fresh chain:', err);
       });
   }
@@ -56,7 +56,7 @@ export class AuditLogger {
     // Best-effort and never awaited by callers: a failure to persist the audit record must
     // never block or fail the clinical action it is describing.
     prisma.auditLog
-      .create({
+      ?.create({
         data: {
           id,
           organisationId: event.organisationId,

@@ -3,6 +3,8 @@ import {
   API_BASE_URL,
   checkApiHealth,
   loginClinician,
+  requestPasswordReset,
+  resetPassword,
   createMeeting,
   recordConsent,
   submitTranscript,
@@ -22,7 +24,7 @@ import { sessionCheckpoint, pendingUpload } from './services/sessionCheckpoint';
 import { MetricsDashboard } from './components/MetricsDashboard';
 import './App.css';
 
-type Screen = 'LOGIN' | 'DASHBOARD' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'REVIEW' | 'COMPLETED' | 'METRICS';
+type Screen = 'LOGIN' | 'FORGOT_PASSWORD' | 'RESET_PASSWORD' | 'DASHBOARD' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'REVIEW' | 'COMPLETED' | 'METRICS';
 type TemplateType = 'INITIAL_ASSESSMENT' | 'REVIEW';
 type SessionFormat = 'FACE_TO_FACE' | 'VIRTUAL';
 
@@ -81,6 +83,18 @@ function App() {
   const [clinicianEmail, setClinicianEmail] = useState('');
   const [clinicianPassword, setClinicianPassword] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
+
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetTokenInput, setResetTokenInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState<string | null>(null);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+  const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
+  const [resetErrorMessage, setResetErrorMessage] = useState<string | null>(null);
+  const [debugResetToken, setDebugResetToken] = useState<string | null>(null);
 
   const [clientRef, setClientRef] = useState('');
   const [templateType, setTemplateType] = useState<TemplateType>('INITIAL_ASSESSMENT');
@@ -195,6 +209,18 @@ function App() {
       alert('Your session has expired. Please sign in again.');
     };
     window.addEventListener('vabatim:auth-expired', onAuthExpired);
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('resetToken') || params.get('token');
+      if (token) {
+        setResetTokenInput(token);
+        setScreen('RESET_PASSWORD');
+      }
+    } catch {
+      // Ignored
+    }
+
     return () => window.removeEventListener('vabatim:auth-expired', onAuthExpired);
   }, []);
 
@@ -230,6 +256,55 @@ function App() {
       alert(`Sign in failed: ${err.message}`);
     } finally {
       setLoggingIn(false);
+    }
+  };
+
+  const handleRequestPasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (forgotSubmitting) return;
+    setForgotSubmitting(true);
+    setForgotMessage(null);
+    setForgotError(null);
+    setDebugResetToken(null);
+    try {
+      const data = await requestPasswordReset(resetEmail);
+      setForgotMessage(data.message || 'If an account exists, reset instructions have been sent.');
+      if (data.debugResetToken) {
+        setDebugResetToken(data.debugResetToken);
+      }
+    } catch (err: any) {
+      setForgotError(err.message || 'Could not request password reset.');
+    } finally {
+      setForgotSubmitting(false);
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (resetSubmitting) return;
+    if (newPasswordInput !== confirmPasswordInput) {
+      setResetErrorMessage('Passwords do not match. Please verify both fields.');
+      return;
+    }
+    if (newPasswordInput.length < 8) {
+      setResetErrorMessage('Password must be at least 8 characters long.');
+      return;
+    }
+    setResetSubmitting(true);
+    setResetSuccessMessage(null);
+    setResetErrorMessage(null);
+    try {
+      const data = await resetPassword(resetTokenInput, newPasswordInput);
+      setResetSuccessMessage(data.message || 'Password has been reset successfully.');
+      setTimeout(() => {
+        if (resetEmail) setClinicianEmail(resetEmail);
+        setClinicianPassword('');
+        setScreen('LOGIN');
+      }, 2500);
+    } catch (err: any) {
+      setResetErrorMessage(err.message || 'Password reset failed. Token may be invalid or expired.');
+    } finally {
+      setResetSubmitting(false);
     }
   };
 
@@ -714,6 +789,140 @@ function App() {
               <button type="submit" className="primaryButton" disabled={loggingIn}>
                 {loggingIn ? 'Signing in…' : 'Sign in'}
               </button>
+            </form>
+            <div style={{ marginTop: 16, textAlign: 'center' }}>
+              <button
+                type="button"
+                className="linkButton"
+                onClick={() => {
+                  setResetEmail(clinicianEmail);
+                  setForgotMessage(null);
+                  setForgotError(null);
+                  setScreen('FORGOT_PASSWORD');
+                }}
+              >
+                Forgot password?
+              </button>
+            </div>
+          </div>
+        )}
+
+        {screen === 'FORGOT_PASSWORD' && (
+          <div className="card">
+            <h2>Reset your password</h2>
+            <p className="hint">
+              Enter the email address associated with your clinician account and we will generate instructions to reset your password.
+            </p>
+
+            {forgotMessage && <div className="successBanner">{forgotMessage}</div>}
+            {forgotError && <div className="warningBanner">{forgotError}</div>}
+
+            {debugResetToken && (
+              <div className="warningBanner" style={{ backgroundColor: '#1e1b4b', borderColor: '#6366f1', color: '#e0e7ff' }}>
+                <strong>Development Reset Link Token:</strong>
+                <br />
+                <code style={{ fontSize: '12px', wordBreak: 'break-all' }}>{debugResetToken}</code>
+                <div style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    className="primaryButton"
+                    onClick={() => {
+                      setResetTokenInput(debugResetToken);
+                      setScreen('RESET_PASSWORD');
+                    }}
+                  >
+                    Proceed to Reset Password Form
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <form onSubmit={handleRequestPasswordReset} className="form">
+              <label className="label">Clinician email</label>
+              <input
+                type="email"
+                value={resetEmail}
+                onChange={(e) => setResetEmail(e.target.value)}
+                className="input"
+                placeholder="clinician@nhstrust.nhs.uk"
+                autoComplete="email"
+                required
+              />
+              <div className="buttonGroup" style={{ marginTop: 12 }}>
+                <button type="submit" className="primaryButton" disabled={forgotSubmitting}>
+                  {forgotSubmitting ? 'Sending…' : 'Send reset instructions'}
+                </button>
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  onClick={() => setScreen('LOGIN')}
+                >
+                  Back to sign in
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {screen === 'RESET_PASSWORD' && (
+          <div className="card">
+            <h2>Create new password</h2>
+            <p className="hint">
+              Enter your password reset token and choose a new secure password (minimum 8 characters).
+            </p>
+
+            {resetSuccessMessage && (
+              <div className="successBanner">
+                {resetSuccessMessage} Redirecting to sign in screen…
+              </div>
+            )}
+            {resetErrorMessage && <div className="warningBanner">{resetErrorMessage}</div>}
+
+            <form onSubmit={handleResetPasswordSubmit} className="form">
+              <label className="label">Reset token</label>
+              <input
+                type="text"
+                value={resetTokenInput}
+                onChange={(e) => setResetTokenInput(e.target.value)}
+                className="input"
+                placeholder="Paste your reset token here"
+                required
+              />
+
+              <label className="label">New password (min 8 characters)</label>
+              <input
+                type="password"
+                value={newPasswordInput}
+                onChange={(e) => setNewPasswordInput(e.target.value)}
+                className="input"
+                placeholder="Enter new password"
+                required
+                minLength={8}
+              />
+
+              <label className="label">Confirm new password</label>
+              <input
+                type="password"
+                value={confirmPasswordInput}
+                onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                className="input"
+                placeholder="Re-enter new password"
+                required
+                minLength={8}
+              />
+
+              <div className="buttonGroup" style={{ marginTop: 12 }}>
+                <button type="submit" className="primaryButton" disabled={resetSubmitting}>
+                  {resetSubmitting ? 'Resetting password…' : 'Reset password'}
+                </button>
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  onClick={() => setScreen('LOGIN')}
+                >
+                  Back to sign in
+                </button>
+              </div>
             </form>
           </div>
         )}

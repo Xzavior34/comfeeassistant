@@ -5,6 +5,7 @@ let mockMeetings: any[] = [];
 let mockConsents: any[] = [];
 let mockNotes: any[] = [];
 let mockJobs: any[] = [];
+let mockAuditLogs: any[] = [];
 
 /** Attaches the relations the routes request via `include`. */
 function withRelations(note: any) {
@@ -27,8 +28,11 @@ jest.mock('../src/db', () => {
     prisma: {
       user: {
         findUnique: jest.fn().mockImplementation(async ({ where }) => {
+          if (!where) return null;
           if (where.email === 'sarah.jenkins@nhs.uk') {
-            return {
+            const found = mockUsers.find(u => u.email === 'sarah.jenkins@nhs.uk');
+            if (found) return found;
+            const seed = {
               id: 'user-clinician-1',
               email: 'sarah.jenkins@nhs.uk',
               fullName: 'Dr. Sarah Jenkins',
@@ -36,9 +40,56 @@ jest.mock('../src/db', () => {
               organisationId: 'NHS-UK-TRUST-01',
               passwordHash: bcrypt.hashSync('ClinicianSecure123!', 10)
             };
+            mockUsers.push(seed);
+            return seed;
           }
-          return mockUsers.find(u => Object.keys(where).every(k => u[k] === where[k]));
+          return mockUsers.find(u => u.id === where.id || (where.email && u.email === where.email) || (where.resetToken && u.resetToken === where.resetToken));
         }),
+        findFirst: jest.fn().mockImplementation(async ({ where }) => {
+          return mockUsers.find(u => {
+            if (!where) return true;
+            if (where.email && u.email !== where.email) return false;
+            if (where.resetToken && u.resetToken !== where.resetToken) return false;
+            if (where.resetTokenExpiry?.gt && u.resetTokenExpiry && u.resetTokenExpiry <= where.resetTokenExpiry.gt) return false;
+            return true;
+          });
+        }),
+        create: jest.fn().mockImplementation(async ({ data }) => {
+          const u = { id: `user-${Date.now()}`, ...data, createdAt: new Date() };
+          mockUsers.push(u);
+          return u;
+        }),
+        update: jest.fn().mockImplementation(async ({ where, data }) => {
+          let u = mockUsers.find(x => x.id === where.id || (where.email && x.email === where.email));
+          if (!u && where.email === 'sarah.jenkins@nhs.uk') {
+            u = {
+              id: 'user-clinician-1',
+              email: 'sarah.jenkins@nhs.uk',
+              fullName: 'Dr. Sarah Jenkins',
+              role: 'CLINICIAN',
+              organisationId: 'NHS-UK-TRUST-01',
+              passwordHash: bcrypt.hashSync('ClinicianSecure123!', 10)
+            };
+            mockUsers.push(u);
+          }
+          if (u) {
+            Object.assign(u, data);
+            return u;
+          }
+          return null;
+        }),
+        deleteMany: jest.fn().mockImplementation(async () => {
+          mockUsers = [];
+          return { count: 0 };
+        })
+      },
+      organisation: {
+        upsert: jest.fn().mockImplementation(async ({ where, create }) => {
+          return { id: 'org-default-1', name: create?.name || 'Default Org', code: where.code };
+        }),
+        findUnique: jest.fn().mockImplementation(async ({ where }) => {
+          return { id: 'org-default-1', name: 'Default Org', code: where.code };
+        })
       },
       meeting: {
         create: jest.fn().mockImplementation(async ({ data }) => {
@@ -139,6 +190,23 @@ jest.mock('../src/db', () => {
           return next;
         })
       },
+      auditLog: {
+        create: jest.fn().mockImplementation(async ({ data }) => {
+          const item = { id: `audit-${Date.now()}`, ...data, timestamp: new Date() };
+          mockAuditLogs.push(item);
+          return item;
+        }),
+        findFirst: jest.fn().mockImplementation(async () => {
+          return mockAuditLogs[mockAuditLogs.length - 1] ?? null;
+        }),
+        findMany: jest.fn().mockImplementation(async ({ where, take }) => {
+          let list = mockAuditLogs;
+          if (where?.organisationId) {
+            list = list.filter((a) => a.organisationId === where.organisationId);
+          }
+          return list.slice(0, take ?? 50);
+        })
+      },
       // Health checks perform a real round trip, so the mock has to answer one.
       $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
       $disconnect: jest.fn()
@@ -152,4 +220,5 @@ beforeEach(() => {
   mockConsents = [];
   mockNotes = [];
   mockJobs = [];
+  mockAuditLogs = [];
 });

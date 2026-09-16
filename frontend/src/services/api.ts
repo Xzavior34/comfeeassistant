@@ -113,6 +113,44 @@ export async function loginClinician(email: string, password?: string) {
   return data;
 }
 
+export async function requestPasswordReset(email: string) {
+  const res = await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email })
+  });
+  if (!res.ok) {
+    let errorText = '';
+    try {
+      const errData = await res.json();
+      errorText = errData.error || errData.message || JSON.stringify(errData);
+    } catch {
+      errorText = await res.text().catch(() => res.statusText);
+    }
+    throw new Error(errorText);
+  }
+  return await res.json();
+}
+
+export async function resetPassword(token: string, newPassword: string) {
+  const res = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, newPassword })
+  });
+  if (!res.ok) {
+    let errorText = '';
+    try {
+      const errData = await res.json();
+      errorText = errData.error || errData.message || JSON.stringify(errData);
+    } catch {
+      errorText = await res.text().catch(() => res.statusText);
+    }
+    throw new Error(errorText);
+  }
+  return await res.json();
+}
+
 export interface MeetingSummary {
   id: string;
   clientReference: string;
