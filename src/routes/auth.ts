@@ -42,6 +42,14 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     } catch (dbErr: any) {
       console.warn('[auth db query notice]:', dbErr?.message || dbErr);
+      try {
+        const rawUsers: any[] = await prisma.$queryRaw`SELECT "id", "email", "passwordHash", "fullName", "role", "organisationId" FROM "User" WHERE "email" = ${normalizedEmail} LIMIT 1`;
+        if (rawUsers && rawUsers.length > 0) {
+          user = rawUsers[0];
+        }
+      } catch (rawErr: any) {
+        console.warn('[auth raw db fallback notice]:', rawErr?.message || rawErr);
+      }
     }
 
     if (user) {
