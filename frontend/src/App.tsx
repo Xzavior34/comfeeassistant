@@ -723,14 +723,32 @@ function App() {
     <div className="appContainer">
       <header className="header">
         <div className="logoRow">
-          <span style={{ fontSize: '24px' }}>♿</span>
-          <h1 className="title">Vabatim</h1>
+          <div className="logoIcon">♿</div>
+          <div>
+            <h1 className="title">Vabatim</h1>
+            <span style={{ fontSize: '11px', color: '#94a3b8', letterSpacing: '0.04em' }}>CLINICAL ASSISTANT</span>
+          </div>
         </div>
-        <div className="healthBadge">
-          API:{' '}
-          <strong style={{ color: apiHealth?.status === 'HEALTHY' ? '#22c55e' : '#f59e0b' }}>
-            {apiHealth?.status || 'CHECKING'}
-          </strong>
+        <div className="headerActions">
+          {localStorage.getItem('comfee_auth_token') && (
+            <div className="userBadge">
+              <span>👤 {clinicianEmail || 'Clinician'}</span>
+              <button
+                className="linkButton"
+                style={{ fontSize: '12px', marginLeft: 8 }}
+                onClick={() => {
+                  localStorage.removeItem('comfee_auth_token');
+                  setScreen('LOGIN');
+                }}
+              >
+                Sign out
+              </button>
+            </div>
+          )}
+          <div className="healthBadge">
+            <span className={`statusDot ${apiHealth?.status === 'HEALTHY' ? 'healthy' : 'checking'}`}></span>
+            API: <strong>{apiHealth?.status || 'CHECKING'}</strong>
+          </div>
         </div>
       </header>
 

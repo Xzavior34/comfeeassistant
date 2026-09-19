@@ -14,6 +14,9 @@ app.listen(PORT, HOST, () => {
   console.log(`=======================================================`);
 
   if (process.env.DATABASE_URL) {
+    if (!process.env.DIRECT_URL) {
+      process.env.DIRECT_URL = process.env.DATABASE_URL;
+    }
     const rawDbUrl = process.env.DATABASE_URL;
     setTimeout(() => {
       try {
@@ -21,9 +24,8 @@ app.listen(PORT, HOST, () => {
         if (directUrl.includes(':6543')) {
           directUrl = directUrl.replace(':6543', ':5432').replace('?pgbouncer=true', '').replace('&pgbouncer=true', '');
         }
-        console.log('[Database Async Sync] Running prisma db push on direct port...');
-        const prismaPath = require.resolve('prisma/build/index.js');
-        execSync(`node "${prismaPath}" db push --skip-generate`, {
+        console.log('[Database Async Sync] Running prisma db push...');
+        execSync(`npx prisma db push --skip-generate`, {
           stdio: 'inherit',
           env: { ...process.env, DIRECT_URL: directUrl, DATABASE_URL: directUrl }
         });
