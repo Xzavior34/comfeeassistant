@@ -1,0 +1,43 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getEmailProvider = getEmailProvider;
+exports.isEmailDeliveryConfigured = isEmailDeliveryConfigured;
+const MockEmailProvider_1 = require("./MockEmailProvider");
+const env_1 = require("../../config/env");
+/**
+ * Email delivery.
+ *
+ * The mock provider demonstrates the workflow without pretending anything was delivered.
+ * `isEmailDeliveryConfigured()` exists so the UI and the API can tell the clinician the
+ * truth — "email delivery is not configured here" — rather than showing "Email sent" for a
+ * message that was written to a log line and discarded.
+ *
+ * Real adapters slot in here when an email service is chosen; none is required for the MVP.
+ */
+function getEmailProvider() {
+    switch (env_1.env.EMAIL_PROVIDER) {
+        case 'smtp':
+        case 'resend':
+            // No credentials-bearing adapter is bundled. Falling through to the mock keeps the
+            // workflow intact and keeps the honest "not configured" signal below accurate.
+            console.warn(`[email] EMAIL_PROVIDER=${env_1.env.EMAIL_PROVIDER} but no delivery adapter is installed; ` +
+                'using the mock provider. No email will be sent.');
+            return new MockEmailProvider_1.MockEmailProvider();
+        default:
+            return new MockEmailProvider_1.MockEmailProvider();
+    }
+}
+/**
+ * True only when mail will genuinely leave the server.
+ *
+ * This used to answer "yes" for EMAIL_PROVIDER=smtp/resend whenever the matching env vars
+ * were set (SMTP_HOST/SMTP_USER, RESEND_API_KEY) — but getEmailProvider() above always
+ * returns MockEmailProvider for both, since no real adapter is bundled. An admin could set
+ * EMAIL_PROVIDER=smtp with real SMTP_HOST/SMTP_USER, have the API report delivery as
+ * "configured", and have a clinician believe a secure document link was actually emailed to a
+ * client when it was only ever written to a log line. This must answer the same question
+ * getEmailProvider() answers, not check env vars independently of what it actually returns.
+ */
+function isEmailDeliveryConfigured() {
+    return !(getEmailProvider() instanceof MockEmailProvider_1.MockEmailProvider);
+}
