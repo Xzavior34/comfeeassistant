@@ -30,6 +30,13 @@ app.listen(PORT, HOST, () => {
           env: { ...process.env, DIRECT_URL: directUrl, DATABASE_URL: directUrl }
         });
         console.log('[Database Async Sync] PostgreSQL schema pushed successfully.');
+
+        console.log('[Database Async Sync] Running seed check...');
+        execSync(`npx ts-node prisma/seed.ts`, {
+          stdio: 'inherit',
+          env: { ...process.env, DIRECT_URL: directUrl, DATABASE_URL: directUrl }
+        });
+        console.log('[Database Async Sync] Seed check finished.');
       } catch (err: any) {
         console.error('[Database Async Sync Warning]:', err?.message || err);
       }

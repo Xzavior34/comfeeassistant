@@ -63,9 +63,9 @@ router.post('/login', async (req: Request, res: Response) => {
         organisationId: user.organisationId
       }
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Login error:', error);
-    return res.status(500).json({ error: 'Internal server error during authentication.' });
+    return res.status(500).json({ error: error?.message || 'Internal server error during authentication.' });
   }
 });
 
@@ -147,9 +147,9 @@ router.post('/register', async (req: Request, res: Response) => {
         organisationId: user.organisationId
       }
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Registration error:', error);
-    return res.status(500).json({ error: 'Internal server error during registration.' });
+    return res.status(500).json({ error: error?.message || 'Internal server error during registration.' });
   }
 });
 
