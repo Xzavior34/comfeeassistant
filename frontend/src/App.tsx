@@ -22,6 +22,7 @@ import { liveTranscription, LiveTranscriptState, TranscriptEntry } from './servi
 import { consultationRecorder, ConsultationRecorder, RecordingState, canRecordAlongsideRecognition } from './services/audioRecorder';
 import { sessionCheckpoint, pendingUpload } from './services/sessionCheckpoint';
 import { MetricsDashboard } from './components/MetricsDashboard';
+import { SAMPLE_CLINICAL_TRANSCRIPT } from './services/sampleTranscript';
 import './App.css';
 
 type Screen = 'LOGIN' | 'FORGOT_PASSWORD' | 'RESET_PASSWORD' | 'DASHBOARD' | 'MEETINGS' | 'CONSENT' | 'RECORDING' | 'PROCESSING' | 'REVIEW' | 'COMPLETED' | 'METRICS';
@@ -104,6 +105,9 @@ function App() {
   const [isListening, setIsListening] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(0);
   const [transcript, setTranscript] = useState<LiveTranscriptState>({ finalEntries: [], interimText: '' });
+  const [manualTranscriptText, setManualTranscriptText] = useState('');
+  const [isEditingTranscript, setIsEditingTranscript] = useState(false);
+  const [showNoTranscriptModal, setShowNoTranscriptModal] = useState(false);
   const [recorderState, setRecorderState] = useState<RecordingState>('IDLE');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [transcriptionAvailable, setTranscriptionAvailable] = useState(true);
@@ -429,6 +433,31 @@ function App() {
     }
   };
 
+  const submitTranscriptContent = async (textToSubmit: string) => {
+    setScreen('PROCESSING');
+    setStatusMessage('Preparing clinical documentation…');
+    setShowNoTranscriptModal(false);
+
+    try {
+      const started = await submitTranscript(meetingId, textToSubmit, clientRef, templateType, sessionFormat);
+      pendingUpload.clear();
+      void sessionCheckpoint.clear(meetingId);
+      pollJob(started.jobId);
+    } catch (err: any) {
+      pendingUpload.save({
+        meetingId,
+        transcriptText: textToSubmit,
+        clientRef,
+        queuedAtIso: new Date().toISOString()
+      });
+      setStatusMessage(
+        `Assessment saved locally — upload pending. ${err.message}. Use Retry below; you do not ` +
+          'need to record the consultation again.'
+      );
+      endingRef.current = false;
+    }
+  };
+
   /**
    * End Assessment.
    *
@@ -447,7 +476,7 @@ function App() {
     const frozen = liveTranscription.stop();
     await consultationRecorder.stop().catch(() => null);
 
-    const transcriptText = frozen.text;
+    const combinedText = [frozen.text, manualTranscriptText].filter(Boolean).join('\n\n').trim();
 
     await sessionCheckpoint.save({
       meetingId,
@@ -457,39 +486,14 @@ function App() {
       wasRecordingAudio: false
     });
 
-    if (!transcriptText || transcriptText.trim().length < 5) {
+    if (!combinedText || combinedText.trim().length < 5) {
       setStatusMessage(null);
       endingRef.current = false;
-      alert(
-        'No usable transcript was captured for this assessment.\n\n' +
-          'Live transcription may be unavailable in this browser, or the microphone may not ' +
-          'have picked up speech. Nothing has been submitted.'
-      );
+      setShowNoTranscriptModal(true);
       return;
     }
 
-    setScreen('PROCESSING');
-    setStatusMessage('Preparing clinical documentation…');
-
-    try {
-      const started = await submitTranscript(meetingId, transcriptText, clientRef, templateType, sessionFormat);
-      pendingUpload.clear();
-      void sessionCheckpoint.clear(meetingId);
-      pollJob(started.jobId);
-    } catch (err: any) {
-      // The transcript is not lost: it is queued locally and the clinician can retry.
-      pendingUpload.save({
-        meetingId,
-        transcriptText,
-        clientRef,
-        queuedAtIso: new Date().toISOString()
-      });
-      setStatusMessage(
-        `Assessment saved locally — upload pending. ${err.message}. Use Retry below; you do not ` +
-          'need to record the consultation again.'
-      );
-      endingRef.current = false;
-    }
+    await submitTranscriptContent(combinedText);
   };
 
   const pollJob = useCallback((jobId: string, forMeetingId?: string) => {
@@ -1161,10 +1165,46 @@ function App() {
               showing nothing.
             */}
             <div className="transcriptStream scrollBox">
-              <h3 style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b', margin: '0 0 8px 0' }}>LIVE TRANSCRIPT</h3>
-              {liveText ? (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <h3 style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b', margin: 0 }}>LIVE TRANSCRIPT</h3>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="secondaryButton"
+                    style={{ fontSize: '11px', padding: '4px 10px' }}
+                    onClick={() => {
+                      setManualTranscriptText(SAMPLE_CLINICAL_TRANSCRIPT);
+                      setIsEditingTranscript(true);
+                    }}
+                  >
+                    📋 Load Sample NHS Assessment (Demo)
+                  </button>
+                  <button
+                    type="button"
+                    className="secondaryButton"
+                    style={{ fontSize: '11px', padding: '4px 10px' }}
+                    onClick={() => setIsEditingTranscript(!isEditingTranscript)}
+                  >
+                    {isEditingTranscript ? '👁 View Stream' : '✏️ Type / Edit Notes'}
+                  </button>
+                </div>
+              </div>
+
+              {isEditingTranscript ? (
+                <textarea
+                  value={manualTranscriptText}
+                  onChange={(e) => setManualTranscriptText(e.target.value)}
+                  placeholder="Type or paste consultation transcript notes here..."
+                  rows={8}
+                  className="input"
+                  style={{ width: '100%', fontFamily: 'inherit', fontSize: '14px', lineHeight: '1.6', background: 'rgba(15, 23, 42, 0.8)' }}
+                />
+              ) : liveText || manualTranscriptText ? (
                 <p>
                   {finalJoinedText}
+                  {manualTranscriptText && (
+                    <span> {manualTranscriptText}</span>
+                  )}
                   {transcript.interimText && (
                     <span style={{ opacity: 0.55 }}> {transcript.interimText}</span>
                   )}
@@ -1173,7 +1213,7 @@ function App() {
                 <p className="hint">
                   {isListening
                     ? 'Listening… speech will appear here as it is recognised.'
-                    : 'Press Start assessment and have the consultation as normal.'}
+                    : 'Press Start assessment and have the consultation as normal, or click "Load Sample NHS Assessment" to test.'}
                 </p>
               )}
               <div ref={transcriptEndRef} />
@@ -1190,6 +1230,56 @@ function App() {
                 </button>
               )}
             </div>
+
+            {/* No Transcript Captured Fallback Dialog */}
+            {showNoTranscriptModal && (
+              <div className="modalOverlay">
+                <div className="modalCard">
+                  <h3 style={{ color: '#f59e0b', margin: '0 0 12px 0', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span>⚠️</span> No Live Speech Captured
+                  </h3>
+                  <p style={{ color: '#cbd5e1', fontSize: '14px', lineHeight: 1.6, marginBottom: 20 }}>
+                    Live transcription was quiet or microphone speech was not detected in this browser session. Choose how to proceed:
+                  </p>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <button
+                      className="primaryButton"
+                      style={{ background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', padding: '12px 18px', fontWeight: 600 }}
+                      onClick={() => {
+                        const sampleText = manualTranscriptText || SAMPLE_CLINICAL_TRANSCRIPT;
+                        setManualTranscriptText(sampleText);
+                        void submitTranscriptContent(sampleText);
+                      }}
+                    >
+                      📋 Load Sample NHS Assessment (Demo) & Submit
+                    </button>
+
+                    <button
+                      className="secondaryButton"
+                      style={{ padding: '12px 18px' }}
+                      onClick={() => {
+                        setIsEditingTranscript(true);
+                        setShowNoTranscriptModal(false);
+                      }}
+                    >
+                      ✏️ Type / Paste Consultation Notes Manually
+                    </button>
+
+                    <button
+                      className="secondaryButton"
+                      style={{ padding: '12px 18px', opacity: 0.8 }}
+                      onClick={() => {
+                        setShowNoTranscriptModal(false);
+                        endingRef.current = false;
+                      }}
+                    >
+                      🎤 Resume Listening / Recording
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* TEMPORARY PRODUCTION DIAGNOSTICS PANEL */}
             <div
