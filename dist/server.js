@@ -32,6 +32,15 @@ app_1.default.listen(PORT, HOST, () => {
                     env: { ...process.env, DIRECT_URL: directUrl, DATABASE_URL: directUrl }
                 });
                 console.log('[Database Async Sync] PostgreSQL schema pushed successfully.');
+                try {
+                    const { prisma } = require('./db');
+                    prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "resetToken" TEXT; ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "resetTokenExpiry" TIMESTAMP(3);`)
+                        .then(() => console.log('[Database Async Sync] User table columns verified.'))
+                        .catch((e) => console.warn('[Database Async Sync] Column verification notice:', e?.message || e));
+                }
+                catch {
+                    // Non-blocking
+                }
                 console.log('[Database Async Sync] Running seed check...');
                 (0, child_process_1.execSync)(`npx ts-node prisma/seed.ts`, {
                     stdio: 'inherit',

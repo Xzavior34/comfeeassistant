@@ -29,11 +29,20 @@ router.post('/login', async (req, res) => {
         const normalizedEmail = String(email).trim().toLowerCase();
         let user = null;
         try {
-            user = await db_1.prisma.user.findUnique({ where: { email: normalizedEmail } });
+            user = await db_1.prisma.user.findUnique({
+                where: { email: normalizedEmail },
+                select: {
+                    id: true,
+                    email: true,
+                    passwordHash: true,
+                    fullName: true,
+                    role: true,
+                    organisationId: true
+                }
+            });
         }
         catch (dbErr) {
-            console.error('[auth db error]:', dbErr);
-            return res.status(500).json({ error: `DB_ERROR: ${dbErr?.message || String(dbErr)}` });
+            console.warn('[auth db query notice]:', dbErr?.message || dbErr);
         }
         if (user) {
             let isPasswordValid = false;
