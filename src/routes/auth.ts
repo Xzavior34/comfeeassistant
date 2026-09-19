@@ -31,7 +31,8 @@ router.post('/login', async (req: Request, res: Response) => {
     try {
       user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     } catch (dbErr: any) {
-      console.warn('[auth] Database query warning during login:', dbErr?.message || dbErr);
+      console.error('[auth db error]:', dbErr);
+      return res.status(500).json({ error: `DB_ERROR: ${dbErr?.message || String(dbErr)}` });
     }
 
     if (user) {
@@ -112,7 +113,8 @@ router.post('/login', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('Login error:', error);
-    return res.status(500).json({ error: error?.message || 'Internal server error during authentication.' });
+    const detailMsg = error?.message || (typeof error === 'object' ? JSON.stringify(error) : String(error));
+    return res.status(500).json({ error: `LOGIN_ERROR: ${detailMsg}` });
   }
 });
 
