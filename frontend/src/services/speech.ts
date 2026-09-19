@@ -608,11 +608,25 @@ export class LiveTranscriptionService {
       // re-delivering exactly what it already gave us) is fully handled below and by
       // trimLeadingOverlap; anything else the speaker says is now always kept.
       if (existing === candidate) {
-        if (acrossRestart) {
+        if (acrossRestart || i === this.finalEntries.length - 1) {
           const withinWindow = atMs - entry.atMs <= 5000;
           if (withinWindow) return;
         }
         continue;
+      }
+
+      if (existing.includes(candidate)) {
+        return;
+      }
+
+      if (candidate.startsWith(existing) && candidate.length > existing.length) {
+        entry.text = text;
+        entry.atMs = atMs;
+        if (confidence !== null) entry.confidence = confidence;
+        this.finalEntriesDirty = true;
+        this.notifyDiagnostics();
+        this.emit();
+        return;
       }
     }
 
