@@ -291,9 +291,14 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
       });
     } catch {
       try {
-        await prisma.$executeRaw`UPDATE "User" SET "resetToken" = ${resetToken}, "resetTokenExpiry" = ${resetTokenExpiry} WHERE "email" = ${normalizedEmail}`;
-      } catch {
-        // Non-blocking DB fallback
+        await prisma.$executeRawUnsafe(
+          `UPDATE "User" SET "resetToken" = $1, "resetTokenExpiry" = $2 WHERE "id" = $3`,
+          resetToken,
+          resetTokenExpiry,
+          user.id
+        );
+      } catch (e: any) {
+        console.warn('[auth] DB update resetToken warning:', e?.message || e);
       }
     }
 
@@ -356,7 +361,22 @@ router.post('/reset-password', async (req: Request, res: Response) => {
       });
     } catch {
       try {
-        const rawUsers: any[] = await prisma.$queryRaw`SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" = ${cleanToken} LIMIT 1`;
+        const rawUsers: any[] = await prisma.$queryRawUnsafe(
+          `SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" = $1 LIMIT 1`,
+          cleanToken
+        );
+        if (rawUsers && rawUsers.length > 0) user = rawUsers[0];
+      } catch {
+        // Fallback
+      }
+    }
+
+    if (!user) {
+      try {
+        const rawUsers: any[] = await prisma.$queryRawUnsafe(
+          `SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" = $1 LIMIT 1`,
+          cleanToken
+        );
         if (rawUsers && rawUsers.length > 0) user = rawUsers[0];
       } catch {
         // Fallback
@@ -380,7 +400,11 @@ router.post('/reset-password', async (req: Request, res: Response) => {
       });
     } catch {
       try {
-        await prisma.$executeRaw`UPDATE "User" SET "passwordHash" = ${passwordHash}, "resetToken" = NULL, "resetTokenExpiry" = NULL WHERE "id" = ${user.id}`;
+        await prisma.$executeRawUnsafe(
+          `UPDATE "User" SET "passwordHash" = $1, "resetToken" = NULL, "resetTokenExpiry" = NULL WHERE "id" = $2`,
+          passwordHash,
+          user.id
+        );
       } catch {
         // Non-blocking
       }

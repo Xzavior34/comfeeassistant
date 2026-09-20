@@ -275,10 +275,10 @@ router.post('/forgot-password', async (req, res) => {
         }
         catch {
             try {
-                await db_1.prisma.$executeRaw `UPDATE "User" SET "resetToken" = ${resetToken}, "resetTokenExpiry" = ${resetTokenExpiry} WHERE "email" = ${normalizedEmail}`;
+                await db_1.prisma.$executeRawUnsafe(`UPDATE "User" SET "resetToken" = $1, "resetTokenExpiry" = $2 WHERE "id" = $3`, resetToken, resetTokenExpiry, user.id);
             }
-            catch {
-                // Non-blocking DB fallback
+            catch (e) {
+                console.warn('[auth] DB update resetToken warning:', e?.message || e);
             }
         }
         try {
@@ -334,7 +334,17 @@ router.post('/reset-password', async (req, res) => {
         }
         catch {
             try {
-                const rawUsers = await db_1.prisma.$queryRaw `SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" = ${cleanToken} LIMIT 1`;
+                const rawUsers = await db_1.prisma.$queryRawUnsafe(`SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" = $1 LIMIT 1`, cleanToken);
+                if (rawUsers && rawUsers.length > 0)
+                    user = rawUsers[0];
+            }
+            catch {
+                // Fallback
+            }
+        }
+        if (!user) {
+            try {
+                const rawUsers = await db_1.prisma.$queryRawUnsafe(`SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" = $1 LIMIT 1`, cleanToken);
                 if (rawUsers && rawUsers.length > 0)
                     user = rawUsers[0];
             }
@@ -358,7 +368,7 @@ router.post('/reset-password', async (req, res) => {
         }
         catch {
             try {
-                await db_1.prisma.$executeRaw `UPDATE "User" SET "passwordHash" = ${passwordHash}, "resetToken" = NULL, "resetTokenExpiry" = NULL WHERE "id" = ${user.id}`;
+                await db_1.prisma.$executeRawUnsafe(`UPDATE "User" SET "passwordHash" = $1, "resetToken" = NULL, "resetTokenExpiry" = NULL WHERE "id" = $2`, passwordHash, user.id);
             }
             catch {
                 // Non-blocking
