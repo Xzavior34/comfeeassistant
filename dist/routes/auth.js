@@ -347,24 +347,7 @@ router.post('/reset-password', async (req, res) => {
             }
         }
         if (!user) {
-            try {
-                const rawUsers = await db_1.prisma.$queryRawUnsafe(`SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" IS NOT NULL LIMIT 1`);
-                if (rawUsers && rawUsers.length > 0)
-                    user = rawUsers[0];
-            }
-            catch {
-                // Fallback
-            }
-        }
-        if (!user) {
-            try {
-                const rawUsers = await db_1.prisma.$queryRawUnsafe(`SELECT "id", "email", "organisationId" FROM "User" ORDER BY "id" ASC LIMIT 1`);
-                if (rawUsers && rawUsers.length > 0)
-                    user = rawUsers[0];
-            }
-            catch {
-                user = { id: 'fallback-user-id', email: 'clinician@vabatim.co.uk', organisationId: 'default-org' };
-            }
+            return res.status(400).json({ error: 'Invalid or expired password reset token.' });
         }
         const passwordHash = await bcrypt_1.default.hash(newPassword, 10);
         try {
