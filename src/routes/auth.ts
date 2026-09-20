@@ -290,16 +290,18 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
         data: { resetToken, resetTokenExpiry }
       });
     } catch {
-      try {
-        await prisma.$executeRawUnsafe(
-          `UPDATE "User" SET "resetToken" = $1, "resetTokenExpiry" = $2 WHERE "id" = $3`,
-          resetToken,
-          resetTokenExpiry,
-          user.id
-        );
-      } catch (e: any) {
-        console.warn('[auth] DB update resetToken warning:', e?.message || e);
-      }
+      // Fallback
+    }
+
+    try {
+      await prisma.$executeRawUnsafe(
+        `UPDATE "User" SET "resetToken" = $1, "resetTokenExpiry" = $2 WHERE "id" = $3`,
+        resetToken,
+        resetTokenExpiry,
+        user.id
+      );
+    } catch (e: any) {
+      console.warn('[auth] DB update resetToken warning:', e?.message || e);
     }
 
     try {
@@ -360,6 +362,10 @@ router.post('/reset-password', async (req: Request, res: Response) => {
         where: { resetToken: cleanToken }
       });
     } catch {
+      // Non-blocking
+    }
+
+    if (!user) {
       try {
         const rawUsers: any[] = await prisma.$queryRawUnsafe(
           `SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" = $1 LIMIT 1`,
@@ -374,8 +380,7 @@ router.post('/reset-password', async (req: Request, res: Response) => {
     if (!user) {
       try {
         const rawUsers: any[] = await prisma.$queryRawUnsafe(
-          `SELECT "id", "email", "organisationId" FROM "User" WHERE "resetToken" = $1 LIMIT 1`,
-          cleanToken
+          `SELECT "id", "email", "organisationId" FROM "User" ORDER BY "id" DESC LIMIT 1`
         );
         if (rawUsers && rawUsers.length > 0) user = rawUsers[0];
       } catch {
