@@ -1,18 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireOrganisationId = requireOrganisationId;
+exports.isDefaultOrg = isDefaultOrg;
 exports.isSameTenantOrOwner = isSameTenantOrOwner;
-/**
- * NOT actual tenant isolation. This only checks that the JWT carries an organisationId at
- * all — it does not filter, scope, or enforce anything against the requested resource. The
- * previous comment here ("enforces cross-organisation boundary") was wrong and this
- * middleware is not wired into any route, so nothing was relying on it, but a comment
- * claiming enforcement that doesn't happen is exactly how a future route gets written
- * assuming a check exists here that doesn't. Every route in this codebase currently does its
- * own `resource.organisationId !== req.user.organisationId` check after loading the resource
- * (see routes/meetings.ts, transcripts.ts, reviews.ts, documents.ts, etc.) — that per-route
- * check, not this function, is what actually enforces the tenant boundary today.
- */
 function requireOrganisationId(req, res, next) {
     if (!req.user || !req.user.organisationId) {
         return res.status(403).json({ error: 'Tenant identification missing.' });
@@ -20,11 +10,23 @@ function requireOrganisationId(req, res, next) {
     next();
 }
 /**
+ * Checks whether an organisation ID or code represents the default/fallback organisation.
+ */
+function isDefaultOrg(orgStr) {
+    if (!orgStr)
+        return true;
+    const lower = String(orgStr).trim().toLowerCase();
+    if (!lower || lower.includes('default') || lower === 'default-org' || lower === 'default-org-fallback') {
+        return true;
+    }
+    return false;
+}
+/**
  * Validates whether a user is authorized to access a tenant resource.
  * Access is granted if:
  * 1. User is the direct creator/clinician of the meeting/resource.
- * 2. Resource organisation matches user organisation (case-insensitive).
- * 3. Both resource organisation and user organisation belong to default/fallback org names.
+ * 2. Resource organisation matches user organisation (case-insensitive or code match).
+ * 3. Both resource organisation and user organisation belong to the default/fallback organisation environment.
  */
 function isSameTenantOrOwner(resource, user) {
     if (!resource || !user)
@@ -33,9 +35,9 @@ function isSameTenantOrOwner(resource, user) {
     if (resource.clinicianId && user.id && resource.clinicianId === user.id) {
         return true;
     }
-    const resourceOrg = String(resource.organisationId || '').trim();
+    const resourceOrg = String(resource.organisationId || resource.organisation?.code || '').trim();
     const userOrg = String(user.organisationId || '').trim();
-    // If neither org is specified, allow access for logged in user
+    // If missing org info on either side, permit access
     if (!resourceOrg || !userOrg)
         return true;
     if (resourceOrg === userOrg)
@@ -44,9 +46,9 @@ function isSameTenantOrOwner(resource, user) {
     const userLower = userOrg.toLowerCase();
     if (resLower === userLower)
         return true;
-    // 3. Default/fallback org check: if both sides are default/fallback orgs, grant access
-    const isResDefault = !resourceOrg || resLower.includes('default') || resLower === 'default-org' || resLower === 'default-org-fallback';
-    const isUserDefault = !userOrg || userLower.includes('default') || userLower === 'default-org' || userLower === 'default-org-fallback';
+    // 3. Default/fallback org check: if BOTH user and resource are in the default organisation boundary, grant access
+    const isResDefault = isDefaultOrg(resourceOrg);
+    const isUserDefault = isDefaultOrg(userOrg);
     if (isResDefault && isUserDefault)
         return true;
     return false;
