@@ -96,7 +96,7 @@ router.post('/login', async (req, res) => {
                 };
             }
         }
-        const secret = process.env.JWT_SECRET || env_1.env?.JWT_SECRET || 'vabatim-prod-jwt-secret-key-2026-secure-prod';
+        const secret = env_1.env.JWT_SECRET;
         const token = jsonwebtoken_1.default.sign({
             id: user.id || 'clinician-user',
             email: user.email || normalizedEmail,

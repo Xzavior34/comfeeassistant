@@ -93,7 +93,7 @@ router.post('/login', async (req: Request, res: Response) => {
       }
     }
 
-    const secret = process.env.JWT_SECRET || (env as any)?.JWT_SECRET || 'vabatim-prod-jwt-secret-key-2026-secure-prod';
+    const secret = env.JWT_SECRET;
     const token = jwt.sign(
       {
         id: user.id || 'clinician-user',

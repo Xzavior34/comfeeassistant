@@ -7,11 +7,8 @@ let authToken = localStorage.getItem('comfee_auth_token') || '';
 
 /** Reads the server's error message, preferring its explanation over a bare status. */
 async function describeError(res: Response): Promise<string> {
-  // 401/403 here always means a request that carried (or should have carried) our own
-  // Authorization header was refused. describeError is only ever called on authenticated
-  // requests (login parses its own errors separately, see below), so this is never a false
-  // positive from a plain bad-password attempt.
-  if (res.status === 401 || res.status === 403) {
+  // 401 here means a request carrying an Authorization header was rejected due to an expired/invalid token.
+  if (res.status === 401) {
     handleAuthFailure();
   }
   try {
