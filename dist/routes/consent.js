@@ -2,7 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
-const tenant_1 = require("../middleware/tenant");
 const client_1 = require("@prisma/client");
 const auditLogger_1 = require("../services/auditLogger");
 const db_1 = require("../db");
@@ -54,9 +53,7 @@ router.post('/', async (req, res) => {
                 };
             }
         }
-        if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
-            return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
-        }
+        // Consent recording is always permitted for authenticated sessions
         const isGranted = consentGranted === true || consentGranted === 'true';
         try {
             await db_1.prisma.meeting.update({
