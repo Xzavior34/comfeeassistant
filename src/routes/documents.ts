@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken } from '../middleware/auth';
+import { isSameTenantOrOwner } from '../middleware/tenant';
 import { prisma } from '../db';
 import { clinicalDocumentService, DocumentMetadata } from '../services/clinicalDocument';
 import { ClinicalNarrative } from '../clinical/narrative';
@@ -56,14 +57,14 @@ const notes = () => prisma.clinicalNote as any;
 
 type LoadResult = { ok: false; status: 404 | 403 } | { ok: true; note: any };
 
-async function loadNoteForUser(noteId: string, organisationId: string): Promise<LoadResult> {
+async function loadNoteForUser(noteId: string, user: AuthenticatedRequest['user']): Promise<LoadResult> {
   const note = await notes().findUnique({
     where: { id: noteId },
     include: { meeting: { include: { organisation: true, clinician: true } }, approvedBy: true }
   });
 
   if (!note) return { ok: false, status: 404 };
-  if (note.meeting.organisationId !== organisationId) return { ok: false, status: 403 };
+  if (!isSameTenantOrOwner(note.meeting, user)) return { ok: false, status: 403 };
   return { ok: true, note };
 }
 
@@ -87,7 +88,7 @@ async function sendDocument(
   res: Response,
   format: 'pdf' | 'docx'
 ): Promise<void> {
-  const loaded = await loadNoteForUser(req.params.noteId, req.user!.organisationId);
+  const loaded = await loadNoteForUser(req.params.noteId, req.user!);
   if (!loaded.ok) {
     res.status(loaded.status).json({ error: loaded.status === 404 ? 'Note not found.' : 'Forbidden.' });
     return;
@@ -155,7 +156,7 @@ router.get('/:noteId/docx', (req: AuthenticatedRequest, res) => sendDocument(req
  * returned a hardcoded fake URL while the mock provider sent nothing.
  */
 router.post('/:noteId/deliver', async (req: AuthenticatedRequest, res: Response) => {
-  const loaded = await loadNoteForUser(req.params.noteId, req.user!.organisationId);
+  const loaded = await loadNoteForUser(req.params.noteId, req.user!);
   if (!loaded.ok) {
     return res.status(loaded.status).json({ error: loaded.status === 404 ? 'Note not found.' : 'Forbidden.' });
   }

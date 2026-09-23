@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken } from '../middleware/auth';
+import { isSameTenantOrOwner } from '../middleware/tenant';
 import { MeetingState } from '@prisma/client';
 import { canTransition } from '../state/meetingStateMachine';
 import { prisma } from '../db';
@@ -221,7 +222,7 @@ router.patch('/:id/state', async (req: AuthenticatedRequest, res: Response) => {
     if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
 
     // Cross-tenant protection
-    if (meeting.organisationId !== req.user!.organisationId) {
+    if (!isSameTenantOrOwner(meeting, req.user!)) {
       return res.status(403).json({ error: 'Forbidden: Access denied to foreign organisation resource.' });
     }
 

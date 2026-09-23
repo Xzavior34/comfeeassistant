@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken, requireRole } from '../middleware/auth';
+import { isSameTenantOrOwner } from '../middleware/tenant';
 import { MeetingState, UserRole } from '@prisma/client';
 import { auditLogger } from '../services/auditLogger';
 import { prisma } from '../db';
@@ -34,7 +35,7 @@ function hashNote(payload: unknown): string {
 router.get('/:meetingId', async (req: AuthenticatedRequest, res: Response) => {
   const meeting = await prisma.meeting.findUnique({ where: { id: req.params.meetingId } });
   if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
-  if (meeting.organisationId !== req.user!.organisationId) {
+  if (!isSameTenantOrOwner(meeting, req.user!)) {
     return res.status(403).json({ error: 'Forbidden.' });
   }
 
@@ -107,7 +108,7 @@ router.patch('/:noteId', requireRole(UserRole.CLINICIAN), async (req: Authentica
     include: { meeting: true, versions: true }
   });
   if (!note) return res.status(404).json({ error: 'Note not found.' });
-  if (note.meeting.organisationId !== req.user!.organisationId) {
+  if (!isSameTenantOrOwner(note.meeting, req.user!)) {
     return res.status(403).json({ error: 'Forbidden.' });
   }
   if (note.status === 'APPROVED' || note.status === 'FINALISED' || note.status === 'EXPORTED') {
@@ -219,7 +220,7 @@ router.post('/approve', requireRole(UserRole.CLINICIAN), async (req: Authenticat
       });
     }
 
-    if (note.meeting.organisationId !== req.user!.organisationId) {
+    if (!isSameTenantOrOwner(note.meeting, req.user!)) {
       return res.status(403).json({ error: 'Forbidden: Tenant isolation violation.' });
     }
 

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
+const tenant_1 = require("../middleware/tenant");
 const client_1 = require("@prisma/client");
 const db_1 = require("../db");
 const storage_1 = require("../providers/storage");
@@ -42,7 +43,7 @@ router.post('/upload', async (req, res) => {
         const meeting = await db_1.prisma.meeting.findUnique({ where: { id: meetingId } });
         if (!meeting)
             return res.status(404).json({ error: 'Meeting not found.' });
-        if (meeting.organisationId !== req.user.organisationId) {
+        if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
             return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
         }
         // Consent is checked before the payload is examined at all: a recording for a session

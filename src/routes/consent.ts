@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken } from '../middleware/auth';
+import { isSameTenantOrOwner } from '../middleware/tenant';
 import { MeetingState } from '@prisma/client';
 import { auditLogger } from '../services/auditLogger';
 import { prisma } from '../db';
@@ -30,13 +31,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
 
     if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
 
-    // Allow consent if orgs match or if default fallback org is used
-    const userOrg = req.user!.organisationId;
-    const isOrgMatch = meeting.organisationId === userOrg || 
-                       userOrg?.includes('default') || 
-                       meeting.organisationId?.includes('default');
-                       
-    if (!isOrgMatch && meeting.clinicianId !== req.user!.id) {
+    if (!isSameTenantOrOwner(meeting, req.user!)) {
       return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
     }
 

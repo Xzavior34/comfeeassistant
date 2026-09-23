@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const zod_1 = require("zod");
 const auth_1 = require("../middleware/auth");
+const tenant_1 = require("../middleware/tenant");
 const client_1 = require("@prisma/client");
 const auditLogger_1 = require("../services/auditLogger");
 const db_1 = require("../db");
@@ -33,7 +34,7 @@ router.get('/:meetingId', async (req, res) => {
     const meeting = await db_1.prisma.meeting.findUnique({ where: { id: req.params.meetingId } });
     if (!meeting)
         return res.status(404).json({ error: 'Meeting not found.' });
-    if (meeting.organisationId !== req.user.organisationId) {
+    if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
         return res.status(403).json({ error: 'Forbidden.' });
     }
     const note = await notes().findFirst({
@@ -96,7 +97,7 @@ router.patch('/:noteId', (0, auth_1.requireRole)(client_1.UserRole.CLINICIAN), a
     });
     if (!note)
         return res.status(404).json({ error: 'Note not found.' });
-    if (note.meeting.organisationId !== req.user.organisationId) {
+    if (!(0, tenant_1.isSameTenantOrOwner)(note.meeting, req.user)) {
         return res.status(403).json({ error: 'Forbidden.' });
     }
     if (note.status === 'APPROVED' || note.status === 'FINALISED' || note.status === 'EXPORTED') {
@@ -198,7 +199,7 @@ router.post('/approve', (0, auth_1.requireRole)(client_1.UserRole.CLINICIAN), as
                 message: 'There is no generated assessment note for this session.'
             });
         }
-        if (note.meeting.organisationId !== req.user.organisationId) {
+        if (!(0, tenant_1.isSameTenantOrOwner)(note.meeting, req.user)) {
             return res.status(403).json({ error: 'Forbidden: Tenant isolation violation.' });
         }
         if (note.status === 'APPROVED' || note.status === 'FINALISED') {

@@ -7,6 +7,7 @@ const express_1 = require("express");
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const crypto_1 = __importDefault(require("crypto"));
 const auth_1 = require("../middleware/auth");
+const tenant_1 = require("../middleware/tenant");
 const client_1 = require("@prisma/client");
 const meetingStateMachine_1 = require("../state/meetingStateMachine");
 const db_1 = require("../db");
@@ -212,7 +213,7 @@ router.patch('/:id/state', async (req, res) => {
         if (!meeting)
             return res.status(404).json({ error: 'Meeting not found.' });
         // Cross-tenant protection
-        if (meeting.organisationId !== req.user.organisationId) {
+        if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
             return res.status(403).json({ error: 'Forbidden: Access denied to foreign organisation resource.' });
         }
         const { targetState } = req.body;

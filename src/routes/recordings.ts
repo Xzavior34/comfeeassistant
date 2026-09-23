@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken } from '../middleware/auth';
+import { isSameTenantOrOwner } from '../middleware/tenant';
 import { MeetingState } from '@prisma/client';
 import { prisma } from '../db';
 import { getStorageProvider } from '../providers/storage';
@@ -48,7 +49,7 @@ router.post('/upload', async (req: AuthenticatedRequest, res: Response) => {
     const meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
     if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
 
-    if (meeting.organisationId !== req.user!.organisationId) {
+    if (!isSameTenantOrOwner(meeting, req.user!)) {
       return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
     }
 

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
+const tenant_1 = require("../middleware/tenant");
 const db_1 = require("../db");
 const clinicalDocument_1 = require("../services/clinicalDocument");
 const auditLogger_1 = require("../services/auditLogger");
@@ -45,14 +46,14 @@ router.get('/secure-access', async (req, res) => {
  */
 router.use(auth_1.authenticateToken);
 const notes = () => db_1.prisma.clinicalNote;
-async function loadNoteForUser(noteId, organisationId) {
+async function loadNoteForUser(noteId, user) {
     const note = await notes().findUnique({
         where: { id: noteId },
         include: { meeting: { include: { organisation: true, clinician: true } }, approvedBy: true }
     });
     if (!note)
         return { ok: false, status: 404 };
-    if (note.meeting.organisationId !== organisationId)
+    if (!(0, tenant_1.isSameTenantOrOwner)(note.meeting, user))
         return { ok: false, status: 403 };
     return { ok: true, note };
 }
@@ -71,7 +72,7 @@ function toMetadata(note) {
     };
 }
 async function sendDocument(req, res, format) {
-    const loaded = await loadNoteForUser(req.params.noteId, req.user.organisationId);
+    const loaded = await loadNoteForUser(req.params.noteId, req.user);
     if (!loaded.ok) {
         res.status(loaded.status).json({ error: loaded.status === 404 ? 'Note not found.' : 'Forbidden.' });
         return;
@@ -125,7 +126,7 @@ router.get('/:noteId/docx', (req, res) => sendDocument(req, res, 'docx'));
  * returned a hardcoded fake URL while the mock provider sent nothing.
  */
 router.post('/:noteId/deliver', async (req, res) => {
-    const loaded = await loadNoteForUser(req.params.noteId, req.user.organisationId);
+    const loaded = await loadNoteForUser(req.params.noteId, req.user);
     if (!loaded.ok) {
         return res.status(loaded.status).json({ error: loaded.status === 404 ? 'Note not found.' : 'Forbidden.' });
     }

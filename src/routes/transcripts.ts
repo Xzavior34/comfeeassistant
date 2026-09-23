@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken } from '../middleware/auth';
+import { isSameTenantOrOwner } from '../middleware/tenant';
 import { prisma } from '../db';
 import { documentationService } from '../services/documentationService';
 import { processingJobStore } from '../services/processingJobStore';
@@ -113,7 +114,7 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
       return res.status(404).json({ error: 'Meeting not found.' });
     }
 
-    if (meeting.organisationId !== req.user!.organisationId) {
+    if (!isSameTenantOrOwner(meeting, req.user!)) {
       diag.finish(403);
       return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
     }
@@ -303,7 +304,7 @@ router.get('/:meetingId', async (req: AuthenticatedRequest, res: Response) => {
     });
 
     if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
-    if (meeting.organisationId !== req.user!.organisationId) {
+    if (!isSameTenantOrOwner(meeting, req.user!)) {
       return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
     }
 

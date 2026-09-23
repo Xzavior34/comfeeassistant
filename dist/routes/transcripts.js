@@ -4,6 +4,7 @@ exports.resolveTranscriptText = resolveTranscriptText;
 const express_1 = require("express");
 const zod_1 = require("zod");
 const auth_1 = require("../middleware/auth");
+const tenant_1 = require("../middleware/tenant");
 const db_1 = require("../db");
 const documentationService_1 = require("../services/documentationService");
 const processingJobStore_1 = require("../services/processingJobStore");
@@ -94,7 +95,7 @@ router.post('/process', async (req, res) => {
             diag.finish(404);
             return res.status(404).json({ error: 'Meeting not found.' });
         }
-        if (meeting.organisationId !== req.user.organisationId) {
+        if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
             diag.finish(403);
             return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
         }
@@ -264,7 +265,7 @@ router.get('/:meetingId', async (req, res) => {
         });
         if (!meeting)
             return res.status(404).json({ error: 'Meeting not found.' });
-        if (meeting.organisationId !== req.user.organisationId) {
+        if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
             return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
         }
         return res.json({

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
+const tenant_1 = require("../middleware/tenant");
 const client_1 = require("@prisma/client");
 const auditLogger_1 = require("../services/auditLogger");
 const db_1 = require("../db");
@@ -29,12 +30,7 @@ router.post('/', async (req, res) => {
         }
         if (!meeting)
             return res.status(404).json({ error: 'Meeting not found.' });
-        // Allow consent if orgs match or if default fallback org is used
-        const userOrg = req.user.organisationId;
-        const isOrgMatch = meeting.organisationId === userOrg ||
-            userOrg?.includes('default') ||
-            meeting.organisationId?.includes('default');
-        if (!isOrgMatch && meeting.clinicianId !== req.user.id) {
+        if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
             return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
         }
         const isGranted = consentGranted === true || consentGranted === 'true';
