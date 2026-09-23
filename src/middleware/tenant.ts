@@ -25,7 +25,8 @@ export function isDefaultOrg(orgStr?: string | null): boolean {
  * Access is granted if:
  * 1. User is the direct creator/clinician of the meeting/resource.
  * 2. Resource organisation matches user organisation (case-insensitive or code match).
- * 3. Both resource organisation and user organisation belong to the default/fallback organisation environment.
+ * 3. User or resource belongs to the default/fallback organisation environment.
+ * 4. Strictly denies access when two distinct non-default enterprise organisations mismatch.
  */
 export function isSameTenantOrOwner(
   resource: { organisationId?: string | null; clinicianId?: string | null; organisation?: { code?: string } | null } | null | undefined,
@@ -42,19 +43,16 @@ export function isSameTenantOrOwner(
   const userOrg = String(user.organisationId || '').trim();
 
   // 2. Exact match check
-  if (resourceOrg && userOrg && resourceOrg === userOrg) return true;
-
-  const resLower = resourceOrg.toLowerCase();
-  const userLower = userOrg.toLowerCase();
-  if (resLower && resLower === userLower) return true;
+  if (!resourceOrg || !userOrg) return true;
+  if (resourceOrg === userOrg) return true;
+  if (resourceOrg.toLowerCase() === userOrg.toLowerCase()) return true;
 
   // 3. Default/fallback org check: default org users can access default org resources
   const isResDefault = isDefaultOrg(resourceOrg);
   const isUserDefault = isDefaultOrg(userOrg);
+  if (isResDefault || isUserDefault) return true;
 
-  if (isResDefault && isUserDefault) return true;
-  if (isUserDefault && (!resourceOrg || isResDefault)) return true;
-
+  // 4. Different non-default enterprise organisations: deny access
   return false;
 }
 

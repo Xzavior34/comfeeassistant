@@ -100,12 +100,27 @@ router.post('/', async (req, res) => {
         // 1. Ensure Organisation exists in PostgreSQL
         let validOrgId = rawOrgId;
         try {
-            const org = await db_1.prisma.organisation.upsert({
-                where: { code: rawOrgId },
-                update: {},
-                create: { name: rawOrgId === 'DEFAULT-ORG' ? 'Default Organisation' : rawOrgId, code: rawOrgId }
-            });
-            validOrgId = org.id;
+            let existingOrg = null;
+            try {
+                existingOrg = await db_1.prisma.organisation.findFirst({
+                    where: { OR: [{ id: rawOrgId }, { code: rawOrgId }] }
+                });
+            }
+            catch {
+                // Safe check
+            }
+            if (existingOrg) {
+                validOrgId = existingOrg.id;
+            }
+            else {
+                const orgCode = rawOrgId === 'DEFAULT-ORG' ? 'DEFAULT-ORG' : rawOrgId;
+                const org = await db_1.prisma.organisation.upsert({
+                    where: { code: orgCode },
+                    update: {},
+                    create: { name: orgCode === 'DEFAULT-ORG' ? 'Default Organisation' : orgCode, code: orgCode }
+                });
+                validOrgId = org.id;
+            }
         }
         catch {
             try {
@@ -139,6 +154,7 @@ router.post('/', async (req, res) => {
                 const initialHash = await bcrypt_1.default.hash('Password123!', 10);
                 existingUser = await db_1.prisma.user.create({
                     data: {
+                        id: rawUserId,
                         email: req.user.email || `clinician-${Date.now()}@vabatim.co.uk`,
                         passwordHash: initialHash,
                         fullName: (req.user.email || 'Clinician').split('@')[0],
@@ -148,14 +164,17 @@ router.post('/', async (req, res) => {
                 });
             }
             validClinicianId = existingUser.id;
-            validOrgId = existingUser.organisationId || validOrgId;
+            if (existingUser.organisationId) {
+                validOrgId = existingUser.organisationId;
+            }
         }
         catch {
             try {
                 const users = await db_1.prisma.$queryRaw `SELECT "id", "organisationId" FROM "User" LIMIT 1`;
                 if (users && users.length > 0) {
                     validClinicianId = users[0].id;
-                    validOrgId = users[0].organisationId || validOrgId;
+                    if (users[0].organisationId)
+                        validOrgId = users[0].organisationId;
                 }
             }
             catch {

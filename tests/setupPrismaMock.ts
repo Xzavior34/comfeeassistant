@@ -85,10 +85,24 @@ jest.mock('../src/db', () => {
       },
       organisation: {
         upsert: jest.fn().mockImplementation(async ({ where, create }) => {
-          return { id: 'org-default-1', name: create?.name || 'Default Org', code: where.code };
+          const code = where.code || 'DEFAULT-ORG';
+          const id = (code === 'DEFAULT-ORG' || code.toLowerCase().includes('default')) ? 'org-default-1' : `org-${code.toLowerCase()}`;
+          return { id, name: create?.name || code, code };
         }),
         findUnique: jest.fn().mockImplementation(async ({ where }) => {
-          return { id: 'org-default-1', name: 'Default Org', code: where.code };
+          const code = where?.code || where?.id || 'DEFAULT-ORG';
+          const id = (code === 'DEFAULT-ORG' || String(code).toLowerCase().includes('default')) ? 'org-default-1' : `org-${String(code).toLowerCase()}`;
+          return { id, name: String(code), code: String(code) };
+        }),
+        findFirst: jest.fn().mockImplementation(async ({ where }) => {
+          let code = where?.code;
+          if (!code && where?.OR && Array.isArray(where.OR)) {
+            const match = where.OR.find((item: any) => item?.code || item?.id);
+            if (match) code = match.code || match.id;
+          }
+          if (!code) code = 'DEFAULT-ORG';
+          const id = (code === 'DEFAULT-ORG' || String(code).toLowerCase().includes('default')) ? 'org-default-1' : `org-${String(code).toLowerCase()}`;
+          return { id, name: String(code), code: String(code) };
         })
       },
       meeting: {

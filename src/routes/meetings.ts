@@ -106,12 +106,26 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     // 1. Ensure Organisation exists in PostgreSQL
     let validOrgId = rawOrgId;
     try {
-      const org = await prisma.organisation.upsert({
-        where: { code: rawOrgId },
-        update: {},
-        create: { name: rawOrgId === 'DEFAULT-ORG' ? 'Default Organisation' : rawOrgId, code: rawOrgId }
-      });
-      validOrgId = org.id;
+      let existingOrg: any = null;
+      try {
+        existingOrg = await prisma.organisation.findFirst({
+          where: { OR: [{ id: rawOrgId }, { code: rawOrgId }] }
+        });
+      } catch {
+        // Safe check
+      }
+
+      if (existingOrg) {
+        validOrgId = existingOrg.id;
+      } else {
+        const orgCode = rawOrgId === 'DEFAULT-ORG' ? 'DEFAULT-ORG' : rawOrgId;
+        const org = await prisma.organisation.upsert({
+          where: { code: orgCode },
+          update: {},
+          create: { name: orgCode === 'DEFAULT-ORG' ? 'Default Organisation' : orgCode, code: orgCode }
+        });
+        validOrgId = org.id;
+      }
     } catch {
       try {
         const orgs: any[] = await prisma.$queryRaw`SELECT "id" FROM "Organisation" LIMIT 1`;
@@ -141,6 +155,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         const initialHash = await bcrypt.hash('Password123!', 10);
         existingUser = await prisma.user.create({
           data: {
+            id: rawUserId,
             email: req.user!.email || `clinician-${Date.now()}@vabatim.co.uk`,
             passwordHash: initialHash,
             fullName: (req.user!.email || 'Clinician').split('@')[0],
@@ -150,13 +165,15 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         });
       }
       validClinicianId = existingUser.id;
-      validOrgId = existingUser.organisationId || validOrgId;
+      if (existingUser.organisationId) {
+        validOrgId = existingUser.organisationId;
+      }
     } catch {
       try {
         const users: any[] = await prisma.$queryRaw`SELECT "id", "organisationId" FROM "User" LIMIT 1`;
         if (users && users.length > 0) {
           validClinicianId = users[0].id;
-          validOrgId = users[0].organisationId || validOrgId;
+          if (users[0].organisationId) validOrgId = users[0].organisationId;
         }
       } catch {
         // Fallback
