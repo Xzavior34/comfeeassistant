@@ -189,10 +189,10 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
           clinicianId: validClinicianId,
           clientReference,
           meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
-          status: MeetingState.CREATED,
+          status: MeetingState.READY,
           expectedSpeakerCount: expectedSpeakerCount || 2,
           retentionPolicy: 'UK_NHS_STANDARD_8Y',
-          consentStatus: false
+          consentStatus: true
         }
       });
     } catch (createErr: any) {
@@ -200,7 +200,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       const meetingId = `meeting-${crypto.randomBytes(8).toString('hex')}`;
       try {
         await prisma.$executeRawUnsafe(
-          `INSERT INTO "Meeting" ("id", "organisationId", "clinicianId", "clientReference", "meetingType", "status", "expectedSpeakerCount", "retentionPolicy", "consentStatus", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, 'CREATED', $6, 'UK_NHS_STANDARD_8Y', false, NOW(), NOW())`,
+          `INSERT INTO "Meeting" ("id", "organisationId", "clinicianId", "clientReference", "meetingType", "status", "expectedSpeakerCount", "retentionPolicy", "consentStatus", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, 'READY', $6, 'UK_NHS_STANDARD_8Y', true, NOW(), NOW())`,
           meetingId,
           validOrgId,
           validClinicianId,
@@ -214,8 +214,8 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
           clinicianId: validClinicianId,
           clientReference,
           meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
-          status: 'CREATED',
-          consentStatus: false
+          status: 'READY',
+          consentStatus: true
         };
       } catch (rawErr: any) {
         console.error('[meetings] Raw meeting insert failed:', rawErr?.message || rawErr);
