@@ -15,8 +15,13 @@ function requireOrganisationId(req, res, next) {
 function isDefaultOrg(orgStr) {
     if (!orgStr)
         return true;
-    const lower = String(orgStr).trim().toLowerCase();
-    if (!lower || lower.includes('default') || lower === 'default-org' || lower === 'default-org-fallback') {
+    const str = String(orgStr).trim();
+    const lower = str.toLowerCase();
+    if (!lower ||
+        lower.includes('default') ||
+        lower === 'default-org' ||
+        lower === 'default-org-fallback' ||
+        /^c[a-z0-9]{20,32}$/i.test(str)) {
         return true;
     }
     return false;
