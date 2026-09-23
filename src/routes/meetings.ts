@@ -106,12 +106,12 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     // 1. Ensure Organisation exists in PostgreSQL
     let validOrgId = rawOrgId;
     try {
-      const defaultOrg = await prisma.organisation.upsert({
-        where: { code: 'DEFAULT-ORG' },
+      const org = await prisma.organisation.upsert({
+        where: { code: rawOrgId },
         update: {},
-        create: { name: 'Default Organisation', code: 'DEFAULT-ORG' }
+        create: { name: rawOrgId === 'DEFAULT-ORG' ? 'Default Organisation' : rawOrgId, code: rawOrgId }
       });
-      validOrgId = defaultOrg.id;
+      validOrgId = org.id;
     } catch {
       try {
         const orgs: any[] = await prisma.$queryRaw`SELECT "id" FROM "Organisation" LIMIT 1`;

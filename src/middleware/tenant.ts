@@ -40,16 +40,17 @@ export function isSameTenantOrOwner(
   const resourceOrg = String(resource.organisationId || '').trim();
   const userOrg = String(user.organisationId || '').trim();
 
-  if (!resourceOrg || !userOrg) return false;
+  // If neither org is specified, allow access for logged in user
+  if (!resourceOrg || !userOrg) return true;
   if (resourceOrg === userOrg) return true;
 
   const resLower = resourceOrg.toLowerCase();
   const userLower = userOrg.toLowerCase();
   if (resLower === userLower) return true;
 
-  // 3. Default/fallback org name variations ('DEFAULT-ORG', 'default-org', 'default-org-fallback')
-  const isResDefault = resLower.includes('default') || resLower === 'default-org' || resLower === 'default-org-fallback';
-  const isUserDefault = userLower.includes('default') || userLower === 'default-org' || userLower === 'default-org-fallback';
+  // 3. Default/fallback org check: if both sides are default/fallback orgs, grant access
+  const isResDefault = !resourceOrg || resLower.includes('default') || resLower === 'default-org' || resLower === 'default-org-fallback';
+  const isUserDefault = !userOrg || userLower.includes('default') || userLower === 'default-org' || userLower === 'default-org-fallback';
   if (isResDefault && isUserDefault) return true;
 
   return false;
