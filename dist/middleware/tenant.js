@@ -32,29 +32,28 @@ function isDefaultOrg(orgStr) {
  * 1. User is the direct creator/clinician of the meeting/resource.
  * 2. Resource organisation matches user organisation (case-insensitive or code match).
  * 3. User or resource belongs to the default/fallback organisation environment.
- * 4. Strictly denies access when two distinct non-default enterprise organisations mismatch.
+ * 4. Strictly denies access ONLY when two distinct non-default enterprise organisations mismatch (e.g. NHS-TRUST-ALPHA vs NHS-TRUST-BETA).
  */
 function isSameTenantOrOwner(resource, user) {
     if (!resource || !user)
         return false;
-    // 1. Direct owner check (clinician created the meeting)
-    if (resource.clinicianId && user.id && resource.clinicianId === user.id) {
+    // 1. Direct owner check (clinician created the meeting or user ID match)
+    if (resource.clinicianId && user.id && (resource.clinicianId === user.id || String(resource.clinicianId).toLowerCase() === String(user.id).toLowerCase())) {
         return true;
     }
     const resourceOrg = String(resource.organisationId || resource.organisation?.code || '').trim();
     const userOrg = String(user.organisationId || '').trim();
-    // 2. Exact match check
+    // 2. If missing organisation identification, permit access under default scope
     if (!resourceOrg || !userOrg)
         return true;
-    if (resourceOrg === userOrg)
-        return true;
+    // 3. Exact match check (case-insensitive)
     if (resourceOrg.toLowerCase() === userOrg.toLowerCase())
         return true;
-    // 3. Default/fallback org check: default org users can access default org resources
-    const isResDefault = isDefaultOrg(resourceOrg);
+    // 4. Default/fallback org check: default org users or CUID scopes can access default resources
+    const isResDefault = isDefaultOrg(resourceOrg) || (!!resource.organisation?.code && isDefaultOrg(resource.organisation.code));
     const isUserDefault = isDefaultOrg(userOrg);
     if (isResDefault || isUserDefault)
         return true;
-    // 4. Different non-default enterprise organisations: deny access
+    // 5. Strictly deny access when two distinct non-default enterprise organisations mismatch
     return false;
 }
