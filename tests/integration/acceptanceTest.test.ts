@@ -57,7 +57,34 @@ describe('Phase 5 Final System Acceptance Test Suite', () => {
     expect(['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED']).toContain(jobRes.body.state);
   });
 
-  it('3. APPROVAL IS REFUSED WHEN THERE IS NO GENERATED NOTE', async () => {
+  it('3. CONSENT RECORDING CONFIRMS THE SESSION IS READY TO START', async () => {
+    const authRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'sarah.jenkins@nhs.uk', password: 'ClinicianSecure123!' });
+    const token = authRes.body.token;
+
+    const meetingRes = await request(app)
+      .post('/api/meetings')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ clientReference: 'CLIENT-CONSENT-READY' });
+    const meetingId = meetingRes.body.meeting.id;
+
+    const consentRes = await request(app)
+      .post('/api/consent')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ meetingId, consentGranted: true, consentVersion: 'v1.2-UK-GDPR' });
+
+    expect(consentRes.status).toBe(200);
+    expect(consentRes.body.consentGranted).toBe(true);
+    expect(consentRes.body.consentStatus).toBe('GRANTED');
+    expect(consentRes.body.meeting).toMatchObject({
+      id: meetingId,
+      consentStatus: true,
+      status: 'READY'
+    });
+  });
+
+  it('4. APPROVAL IS REFUSED WHEN THERE IS NO GENERATED NOTE', async () => {
     const authRes = await request(app)
       .post('/api/auth/login')
       .send({ email: 'sarah.jenkins@nhs.uk', password: 'ClinicianSecure123!' });
@@ -80,7 +107,7 @@ describe('Phase 5 Final System Acceptance Test Suite', () => {
     expect(approveRes.body.error).toMatch(/no note to approve/i);
   });
 
-  it('4. U. APPROVAL REQUIRES EXPLICIT CLINICIAN ATTESTATION', async () => {
+  it('5. U. APPROVAL REQUIRES EXPLICIT CLINICIAN ATTESTATION', async () => {
     const authRes = await request(app)
       .post('/api/auth/login')
       .send({ email: 'sarah.jenkins@nhs.uk', password: 'ClinicianSecure123!' });

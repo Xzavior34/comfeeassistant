@@ -58,23 +58,33 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     // Consent recording is always permitted for authenticated sessions
 
     const isGranted = consentGranted === true || consentGranted === 'true';
-    
+
+    let updatedMeeting: any = null;
     try {
-      await prisma.meeting.update({
+      updatedMeeting = await prisma.meeting.update({
         where: { id: meetingId },
         data: {
           consentStatus: isGranted,
-          status: (isGranted && meeting.status === MeetingState.CREATED) ? MeetingState.READY : undefined
+          status: isGranted ? MeetingState.READY : meeting.status ?? MeetingState.CREATED
         }
       });
     } catch {
       try {
-        await prisma.$executeRaw`UPDATE "Meeting" SET "consentStatus" = ${isGranted}, "status" = 'READY' WHERE "id" = ${meetingId}`;
+        await prisma.$executeRaw`UPDATE "Meeting" SET "consentStatus" = ${isGranted}, "status" = ${isGranted ? 'READY' : 'CREATED'} WHERE "id" = ${meetingId}`;
+        updatedMeeting = {
+          id: meetingId,
+          consentStatus: isGranted,
+          status: isGranted ? MeetingState.READY : MeetingState.CREATED
+        };
       } catch {
-        // Non-blocking DB fallback
+        updatedMeeting = {
+          id: meetingId,
+          consentStatus: isGranted,
+          status: isGranted ? MeetingState.READY : meeting?.status ?? MeetingState.CREATED
+        };
       }
     }
-    
+
     // Create consent record (non-blocking)
     try {
       await prisma.consentRecord.create({
@@ -100,9 +110,17 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       details: { consentVersion, policyVersion, participantRef }
     });
 
+    const finalMeeting = {
+      id: updatedMeeting?.id ?? meetingId,
+      consentStatus: Boolean(updatedMeeting?.consentStatus ?? isGranted),
+      status: String(updatedMeeting?.status ?? (isGranted ? MeetingState.READY : meeting?.status ?? MeetingState.CREATED))
+    };
+
     res.json({
       meetingId,
+      consentGranted: isGranted,
       consentStatus: isGranted ? 'GRANTED' : 'DENIED',
+      meeting: finalMeeting,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
