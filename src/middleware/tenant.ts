@@ -41,18 +41,19 @@ export function isSameTenantOrOwner(
   const resourceOrg = String(resource.organisationId || resource.organisation?.code || '').trim();
   const userOrg = String(user.organisationId || '').trim();
 
-  // If missing org info on either side, permit access
-  if (!resourceOrg || !userOrg) return true;
-  if (resourceOrg === userOrg) return true;
+  // 2. Exact match check
+  if (resourceOrg && userOrg && resourceOrg === userOrg) return true;
 
   const resLower = resourceOrg.toLowerCase();
   const userLower = userOrg.toLowerCase();
-  if (resLower === userLower) return true;
+  if (resLower && resLower === userLower) return true;
 
-  // 3. Default/fallback org check: if BOTH user and resource are in the default organisation boundary, grant access
+  // 3. Default/fallback org check: default org users can access default org resources
   const isResDefault = isDefaultOrg(resourceOrg);
   const isUserDefault = isDefaultOrg(userOrg);
+
   if (isResDefault && isUserDefault) return true;
+  if (isUserDefault && (!resourceOrg || isResDefault)) return true;
 
   return false;
 }
