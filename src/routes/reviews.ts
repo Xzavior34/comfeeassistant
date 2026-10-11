@@ -51,7 +51,19 @@ router.get('/:meetingId', async (req: AuthenticatedRequest, res: Response) => {
     });
   }
 
-  const narrative = note.narrativeJson as ClinicalNarrative | null;
+  let narrative = note.narrativeJson as ClinicalNarrative | null;
+
+  // Legacy notes only have structuredJson — rebuild narrative on the fly.
+  if (!narrative && note.structuredJson) {
+    try {
+      const { buildNarrative } = await import('../clinical/narrative');
+      const { StructuredExtractionSchema } = await import('../clinical/provenance');
+      const parsed = StructuredExtractionSchema.safeParse(note.structuredJson);
+      if (parsed.success) narrative = buildNarrative(parsed.data);
+    } catch {
+      // Non-blocking — narrative stays null and the UI shows "no content yet"
+    }
+  }
 
   return res.json({
     noteId: note.id,

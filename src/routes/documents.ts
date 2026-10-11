@@ -4,7 +4,8 @@ import { authenticateToken } from '../middleware/auth';
 import { isSameTenantOrOwner } from '../middleware/tenant';
 import { prisma } from '../db';
 import { clinicalDocumentService, DocumentMetadata } from '../services/clinicalDocument';
-import { ClinicalNarrative } from '../clinical/narrative';
+import { ClinicalNarrative, buildNarrative } from '../clinical/narrative';
+import { StructuredExtraction } from '../clinical/provenance';
 import { auditLogger } from '../services/auditLogger';
 import { getEmailProvider, isEmailDeliveryConfigured } from '../providers/email';
 
@@ -95,7 +96,17 @@ async function sendDocument(
   }
 
   const note = loaded.note;
-  const narrative = note.narrativeJson as ClinicalNarrative | null;
+  let narrative = note.narrativeJson as ClinicalNarrative | null;
+
+  // Legacy notes generated before narrativeJson was stored have only structuredJson.
+  // Rebuild the narrative from it so the document can still be exported.
+  if (!narrative && note.structuredJson) {
+    try {
+      narrative = buildNarrative(note.structuredJson as StructuredExtraction);
+    } catch {
+      // structuredJson is also malformed — fall through to the 409 below.
+    }
+  }
 
   if (!narrative) {
     res.status(409).json({
