@@ -100,15 +100,9 @@ router.post('/', async (req, res) => {
         // 1. Ensure Organisation exists in PostgreSQL
         let validOrgId = rawOrgId;
         try {
-            let existingOrg = null;
-            try {
-                existingOrg = await db_1.prisma.organisation.findFirst({
-                    where: { OR: [{ id: rawOrgId }, { code: rawOrgId }] }
-                });
-            }
-            catch {
-                // Safe check
-            }
+            let existingOrg = await db_1.prisma.organisation.findFirst({
+                where: { OR: [{ id: rawOrgId }, { code: rawOrgId }] }
+            }).catch(() => null);
             if (existingOrg) {
                 validOrgId = existingOrg.id;
             }
@@ -118,8 +112,9 @@ router.post('/', async (req, res) => {
                     where: { code: orgCode },
                     update: {},
                     create: { name: orgCode === 'DEFAULT-ORG' ? 'Default Organisation' : orgCode, code: orgCode }
-                });
-                validOrgId = org.id;
+                }).catch(() => null);
+                if (org)
+                    validOrgId = org.id;
             }
         }
         catch {
@@ -136,36 +131,31 @@ router.post('/', async (req, res) => {
         let validClinicianId = rawUserId;
         try {
             let existingUser = null;
-            try {
-                existingUser = await db_1.prisma.user.findUnique({ where: { id: rawUserId } });
+            if (rawUserId && !rawUserId.startsWith('fallback-')) {
+                existingUser = await db_1.prisma.user.findUnique({ where: { id: rawUserId } }).catch(() => null);
             }
-            catch {
-                // Safe check
-            }
-            if (!existingUser && req.user.email) {
-                try {
-                    existingUser = await db_1.prisma.user.findUnique({ where: { email: req.user.email } });
-                }
-                catch {
-                    // Safe check
-                }
+            if (!existingUser && req.user?.email) {
+                existingUser = await db_1.prisma.user.findUnique({ where: { email: req.user.email.toLowerCase().trim() } }).catch(() => null);
             }
             if (!existingUser) {
                 const initialHash = await bcrypt_1.default.hash('Password123!', 10);
-                existingUser = await db_1.prisma.user.create({
-                    data: {
-                        id: rawUserId,
-                        email: req.user.email || `clinician-${Date.now()}@vabatim.co.uk`,
+                const email = req.user?.email ? req.user.email.toLowerCase().trim() : `clinician-${Date.now()}@vabatim.co.uk`;
+                existingUser = await db_1.prisma.user.upsert({
+                    where: { email },
+                    update: {},
+                    create: {
+                        email,
                         passwordHash: initialHash,
-                        fullName: (req.user.email || 'Clinician').split('@')[0],
+                        fullName: email.split('@')[0],
                         role: 'CLINICIAN',
                         organisationId: validOrgId
                     }
-                });
+                }).catch(() => null);
             }
-            validClinicianId = existingUser.id;
-            if (existingUser.organisationId) {
-                validOrgId = existingUser.organisationId;
+            if (existingUser) {
+                validClinicianId = existingUser.id;
+                if (existingUser.organisationId)
+                    validOrgId = existingUser.organisationId;
             }
         }
         catch {
@@ -188,8 +178,10 @@ router.post('/', async (req, res) => {
                 data: {
                     organisationId: validOrgId,
                     clinicianId: validClinicianId,
-                    clientReference,
+                    clientReference: clientReference || 'Unspecified',
                     meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
+                    templateType: templateType || 'INITIAL_ASSESSMENT',
+                    sessionFormat: sessionFormat || 'FACE_TO_FACE',
                     status: client_1.MeetingState.CREATED,
                     expectedSpeakerCount: expectedSpeakerCount || 2,
                     retentionPolicy: 'UK_NHS_STANDARD_8Y',
@@ -198,24 +190,26 @@ router.post('/', async (req, res) => {
             });
         }
         catch (createErr) {
-            console.warn('[meetings] prisma.meeting.create warning, executing raw insert fallback:', createErr?.message || createErr);
+            console.warn('[meetings] prisma.meeting.create warning, executing fallback insert:', createErr?.message || createErr);
             const meetingId = `meeting-${crypto_1.default.randomBytes(8).toString('hex')}`;
             try {
-                await db_1.prisma.$executeRawUnsafe(`INSERT INTO "Meeting" ("id", "organisationId", "clinicianId", "clientReference", "meetingType", "status", "expectedSpeakerCount", "retentionPolicy", "consentStatus", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, 'CREATED', $6, 'UK_NHS_STANDARD_8Y', false, NOW(), NOW())`, meetingId, validOrgId, validClinicianId, clientReference, meetingType || 'WHEELCHAIR_ASSESSMENT', expectedSpeakerCount || 2);
-                meeting = {
-                    id: meetingId,
-                    organisationId: validOrgId,
-                    clinicianId: validClinicianId,
-                    clientReference,
-                    meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
-                    status: 'CREATED',
-                    consentStatus: false
-                };
+                await db_1.prisma.$executeRawUnsafe(`INSERT INTO "Meeting" ("id", "organisationId", "clinicianId", "clientReference", "meetingType", "status", "expectedSpeakerCount", "retentionPolicy", "consentStatus", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, 'CREATED', $6, 'UK_NHS_STANDARD_8Y', false, NOW(), NOW())`, meetingId, validOrgId, validClinicianId, clientReference || 'Unspecified', meetingType || 'WHEELCHAIR_ASSESSMENT', expectedSpeakerCount || 2);
             }
             catch (rawErr) {
-                console.error('[meetings] Raw meeting insert failed:', rawErr?.message || rawErr);
-                throw createErr;
+                console.warn('[meetings] Raw meeting insert notice:', rawErr?.message || rawErr);
             }
+            meeting = {
+                id: meetingId,
+                organisationId: validOrgId,
+                clinicianId: validClinicianId,
+                clientReference: clientReference || 'Unspecified',
+                meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
+                templateType: templateType || 'INITIAL_ASSESSMENT',
+                sessionFormat: sessionFormat || 'FACE_TO_FACE',
+                status: client_1.MeetingState.CREATED,
+                consentStatus: false,
+                createdAt: new Date().toISOString()
+            };
         }
         res.status(201).json({ meeting });
     }

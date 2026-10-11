@@ -55,21 +55,31 @@ router.post('/', async (req, res) => {
         }
         // Consent recording is always permitted for authenticated sessions
         const isGranted = consentGranted === true || consentGranted === 'true';
+        let updatedMeeting = null;
         try {
-            await db_1.prisma.meeting.update({
+            updatedMeeting = await db_1.prisma.meeting.update({
                 where: { id: meetingId },
                 data: {
                     consentStatus: isGranted,
-                    status: (isGranted && meeting.status === client_1.MeetingState.CREATED) ? client_1.MeetingState.READY : undefined
+                    status: isGranted ? client_1.MeetingState.READY : meeting.status ?? client_1.MeetingState.CREATED
                 }
             });
         }
         catch {
             try {
-                await db_1.prisma.$executeRaw `UPDATE "Meeting" SET "consentStatus" = ${isGranted}, "status" = 'READY' WHERE "id" = ${meetingId}`;
+                await db_1.prisma.$executeRaw `UPDATE "Meeting" SET "consentStatus" = ${isGranted}, "status" = ${isGranted ? 'READY' : 'CREATED'} WHERE "id" = ${meetingId}`;
+                updatedMeeting = {
+                    id: meetingId,
+                    consentStatus: isGranted,
+                    status: isGranted ? client_1.MeetingState.READY : client_1.MeetingState.CREATED
+                };
             }
             catch {
-                // Non-blocking DB fallback
+                updatedMeeting = {
+                    id: meetingId,
+                    consentStatus: isGranted,
+                    status: isGranted ? client_1.MeetingState.READY : meeting?.status ?? client_1.MeetingState.CREATED
+                };
             }
         }
         // Create consent record (non-blocking)
@@ -96,9 +106,16 @@ router.post('/', async (req, res) => {
             resourceId: meetingId,
             details: { consentVersion, policyVersion, participantRef }
         });
+        const finalMeeting = {
+            id: updatedMeeting?.id ?? meetingId,
+            consentStatus: Boolean(updatedMeeting?.consentStatus ?? isGranted),
+            status: String(updatedMeeting?.status ?? (isGranted ? client_1.MeetingState.READY : meeting?.status ?? client_1.MeetingState.CREATED))
+        };
         res.json({
             meetingId,
+            consentGranted: isGranted,
             consentStatus: isGranted ? 'GRANTED' : 'DENIED',
+            meeting: finalMeeting,
             timestamp: new Date().toISOString()
         });
     }

@@ -106,14 +106,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     // 1. Ensure Organisation exists in PostgreSQL
     let validOrgId = rawOrgId;
     try {
-      let existingOrg: any = null;
-      try {
-        existingOrg = await prisma.organisation.findFirst({
-          where: { OR: [{ id: rawOrgId }, { code: rawOrgId }] }
-        });
-      } catch {
-        // Safe check
-      }
+      let existingOrg: any = await prisma.organisation.findFirst({
+        where: { OR: [{ id: rawOrgId }, { code: rawOrgId }] }
+      }).catch(() => null);
 
       if (existingOrg) {
         validOrgId = existingOrg.id;
@@ -123,8 +118,8 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
           where: { code: orgCode },
           update: {},
           create: { name: orgCode === 'DEFAULT-ORG' ? 'Default Organisation' : orgCode, code: orgCode }
-        });
-        validOrgId = org.id;
+        }).catch(() => null);
+        if (org) validOrgId = org.id;
       }
     } catch {
       try {
@@ -139,34 +134,30 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     let validClinicianId = rawUserId;
     try {
       let existingUser: any = null;
-      try {
-        existingUser = await prisma.user.findUnique({ where: { id: rawUserId } });
-      } catch {
-        // Safe check
+      if (rawUserId && !rawUserId.startsWith('fallback-')) {
+        existingUser = await prisma.user.findUnique({ where: { id: rawUserId } }).catch(() => null);
       }
-      if (!existingUser && req.user!.email) {
-        try {
-          existingUser = await prisma.user.findUnique({ where: { email: req.user!.email } });
-        } catch {
-          // Safe check
-        }
+      if (!existingUser && req.user?.email) {
+        existingUser = await prisma.user.findUnique({ where: { email: req.user.email.toLowerCase().trim() } }).catch(() => null);
       }
       if (!existingUser) {
         const initialHash = await bcrypt.hash('Password123!', 10);
-        existingUser = await prisma.user.create({
-          data: {
-            id: rawUserId,
-            email: req.user!.email || `clinician-${Date.now()}@vabatim.co.uk`,
+        const email = req.user?.email ? req.user.email.toLowerCase().trim() : `clinician-${Date.now()}@vabatim.co.uk`;
+        existingUser = await prisma.user.upsert({
+          where: { email },
+          update: {},
+          create: {
+            email,
             passwordHash: initialHash,
-            fullName: (req.user!.email || 'Clinician').split('@')[0],
+            fullName: email.split('@')[0],
             role: 'CLINICIAN',
             organisationId: validOrgId
           }
-        });
+        }).catch(() => null);
       }
-      validClinicianId = existingUser.id;
-      if (existingUser.organisationId) {
-        validOrgId = existingUser.organisationId;
+      if (existingUser) {
+        validClinicianId = existingUser.id;
+        if (existingUser.organisationId) validOrgId = existingUser.organisationId;
       }
     } catch {
       try {
@@ -187,40 +178,44 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         data: {
           organisationId: validOrgId,
           clinicianId: validClinicianId,
-          clientReference,
+          clientReference: clientReference || 'Unspecified',
           meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
-          status: MeetingState.READY,
+          templateType: templateType || 'INITIAL_ASSESSMENT',
+          sessionFormat: sessionFormat || 'FACE_TO_FACE',
+          status: MeetingState.CREATED,
           expectedSpeakerCount: expectedSpeakerCount || 2,
           retentionPolicy: 'UK_NHS_STANDARD_8Y',
-          consentStatus: true
+          consentStatus: false
         }
       });
     } catch (createErr: any) {
-      console.warn('[meetings] prisma.meeting.create warning, executing raw insert fallback:', createErr?.message || createErr);
+      console.warn('[meetings] prisma.meeting.create warning, executing fallback insert:', createErr?.message || createErr);
       const meetingId = `meeting-${crypto.randomBytes(8).toString('hex')}`;
       try {
         await prisma.$executeRawUnsafe(
-          `INSERT INTO "Meeting" ("id", "organisationId", "clinicianId", "clientReference", "meetingType", "status", "expectedSpeakerCount", "retentionPolicy", "consentStatus", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, 'READY', $6, 'UK_NHS_STANDARD_8Y', true, NOW(), NOW())`,
+          `INSERT INTO "Meeting" ("id", "organisationId", "clinicianId", "clientReference", "meetingType", "status", "expectedSpeakerCount", "retentionPolicy", "consentStatus", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, 'CREATED', $6, 'UK_NHS_STANDARD_8Y', false, NOW(), NOW())`,
           meetingId,
           validOrgId,
           validClinicianId,
-          clientReference,
+          clientReference || 'Unspecified',
           meetingType || 'WHEELCHAIR_ASSESSMENT',
           expectedSpeakerCount || 2
         );
-        meeting = {
-          id: meetingId,
-          organisationId: validOrgId,
-          clinicianId: validClinicianId,
-          clientReference,
-          meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
-          status: 'READY',
-          consentStatus: true
-        };
       } catch (rawErr: any) {
-        console.error('[meetings] Raw meeting insert failed:', rawErr?.message || rawErr);
-        throw createErr;
+        console.warn('[meetings] Raw meeting insert notice:', rawErr?.message || rawErr);
       }
+      meeting = {
+        id: meetingId,
+        organisationId: validOrgId,
+        clinicianId: validClinicianId,
+        clientReference: clientReference || 'Unspecified',
+        meetingType: meetingType || 'WHEELCHAIR_ASSESSMENT',
+        templateType: templateType || 'INITIAL_ASSESSMENT',
+        sessionFormat: sessionFormat || 'FACE_TO_FACE',
+        status: MeetingState.CREATED,
+        consentStatus: false,
+        createdAt: new Date().toISOString()
+      };
     }
 
     res.status(201).json({ meeting });

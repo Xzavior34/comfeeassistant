@@ -46,8 +46,6 @@ router.post('/upload', async (req, res) => {
         if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
             return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
         }
-        // Consent is checked before the payload is examined at all: a recording for a session
-        // with no consent is not something to validate, it is something to refuse.
         if (!meeting.consentStatus) {
             return res.status(400).json({
                 error: 'Consent required. Recording upload blocked until valid consent is recorded.'

@@ -53,17 +53,10 @@ router.post('/upload', async (req: AuthenticatedRequest, res: Response) => {
       return res.status(403).json({ error: 'Forbidden: Multi-tenant boundary violation.' });
     }
 
-    // Ensure consentStatus is active so recording uploads are never blocked
     if (!meeting.consentStatus) {
-      try {
-        await prisma.meeting.update({
-          where: { id: meeting.id },
-          data: { consentStatus: true }
-        });
-      } catch {
-        // Non-blocking fallback
-      }
-      meeting.consentStatus = true;
+      return res.status(400).json({
+        error: 'Consent required. Recording upload blocked until valid consent is recorded.'
+      });
     }
 
     if (!audioStorageEnabled()) {
