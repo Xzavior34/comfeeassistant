@@ -201,7 +201,7 @@ router.get('/job/:jobId', async (req: AuthenticatedRequest, res: Response) => {
   const job = await processingJobStore.get(req.params.jobId);
   if (!job) return res.status(404).json({ error: 'Job not found.' });
 
-  if (job.organisationId !== req.user!.organisationId) {
+  if (!isSameTenantOrOwner({ organisationId: job.organisationId }, req.user!)) {
     return res.status(403).json({ error: 'Forbidden.' });
   }
 
@@ -226,7 +226,7 @@ async function retryHandler(req: AuthenticatedRequest, res: Response) {
   const meeting = await prisma.meeting.findUnique({ where: { id: req.params.meetingId } });
   if (!meeting) return res.status(404).json({ error: 'Meeting not found.' });
 
-  if (meeting.organisationId !== req.user!.organisationId) {
+  if (!isSameTenantOrOwner({ organisationId: meeting.organisationId, clinicianId: meeting.clinicianId }, req.user!)) {
     return res.status(403).json({ error: 'Forbidden.' });
   }
 
