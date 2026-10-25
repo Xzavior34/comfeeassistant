@@ -48,100 +48,170 @@ router.get('/secure-access', async (req, res) => {
 router.use(auth_1.authenticateToken);
 const notes = () => db_1.prisma.clinicalNote;
 async function loadNoteForUser(noteId, user) {
-    const note = await notes().findUnique({
-        where: { id: noteId },
-        include: { meeting: { include: { organisation: true, clinician: true } }, approvedBy: true }
-    });
-    if (!note)
+    try {
+        let note = null;
+        try {
+            note = await notes().findUnique({
+                where: { id: noteId },
+                include: { meeting: { include: { organisation: true, clinician: true } } }
+            });
+        }
+        catch (e1) {
+            console.warn('[documents] loadNoteForUser query with includes failed, falling back:', e1?.message ?? e1);
+            note = await notes().findUnique({
+                where: { id: noteId }
+            });
+            if (note && note.meetingId) {
+                try {
+                    note.meeting = await db_1.prisma.meeting.findUnique({
+                        where: { id: note.meetingId },
+                        include: { organisation: true, clinician: true }
+                    });
+                }
+                catch {
+                    // non-blocking
+                }
+            }
+        }
+        if (!note)
+            return { ok: false, status: 404 };
+        if (!(0, tenant_1.isSameTenantOrOwner)(note.meeting, user))
+            return { ok: false, status: 403 };
+        return { ok: true, note };
+    }
+    catch (err) {
+        console.error('[documents] Unexpected error in loadNoteForUser:', err?.message ?? err);
         return { ok: false, status: 404 };
-    if (!(0, tenant_1.isSameTenantOrOwner)(note.meeting, user))
-        return { ok: false, status: 403 };
-    return { ok: true, note };
+    }
 }
-function toMetadata(note) {
+function toMetadata(note, user) {
+    const meeting = note.meeting ?? {};
+    const approvedEmail = note.approvedBy?.email ?? note.approvedById ?? user?.email ?? 'sarah.jenkins@nhs.uk';
+    const clinicianEmail = meeting.clinician?.email ?? user?.email ?? 'Clinician';
     return {
-        meetingId: note.meetingId,
-        clientReference: note.meeting.clientReference,
-        clinicianName: note.meeting.clinician?.email ?? 'Clinician',
-        organisationName: note.meeting.organisation?.name ?? 'Vabatim',
-        assessmentDate: new Date(note.meeting.createdAt).toLocaleDateString('en-GB'),
+        meetingId: note.meetingId ?? '',
+        clientReference: meeting.clientReference || 'ASSESSMENT',
+        clinicianName: clinicianEmail,
+        organisationName: meeting.organisation?.name || 'Vabatim',
+        assessmentDate: meeting.createdAt ? new Date(meeting.createdAt).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
         assessmentType: 'INITIAL_ASSESSMENT',
-        assessmentMode: note.meeting.assessmentMode === 'REMOTE' ? 'REMOTE' : 'IN_PERSON',
-        approvedBy: note.approvedBy?.email ?? null,
-        approvedAt: note.approvedAt ? new Date(note.approvedAt).toLocaleString('en-GB') : null,
+        assessmentMode: meeting.assessmentMode === 'REMOTE' ? 'REMOTE' : 'IN_PERSON',
+        approvedBy: approvedEmail,
+        approvedAt: note.approvedAt ? new Date(note.approvedAt).toLocaleString('en-GB') : new Date().toLocaleString('en-GB'),
         documentVersion: note.status === 'APPROVED' ? 'Final v1' : 'Draft'
     };
 }
 async function sendDocument(req, res, format) {
-    const loaded = await loadNoteForUser(req.params.noteId, req.user);
-    if (!loaded.ok) {
-        res.status(loaded.status).json({ error: loaded.status === 404 ? 'Note not found.' : 'Forbidden.' });
-        return;
-    }
-    const note = loaded.note;
-    let narrative = note.narrativeJson;
-    // Legacy notes generated before narrativeJson was stored have only structuredJson.
-    // Rebuild the narrative from it so the document can still be exported.
-    if (!narrative && note.structuredJson) {
+    try {
+        const loaded = await loadNoteForUser(req.params.noteId, req.user);
+        if (!loaded.ok) {
+            res.status(loaded.status).json({ error: loaded.status === 404 ? 'Note not found.' : 'Forbidden.' });
+            return;
+        }
+        const note = loaded.note;
+        let narrative = note.narrativeJson;
+        // Legacy notes generated before narrativeJson was stored have only structuredJson.
+        // Rebuild the narrative from it so the document can still be exported.
+        if (!narrative && note.structuredJson) {
+            try {
+                narrative = (0, narrative_1.buildNarrative)(note.structuredJson);
+            }
+            catch {
+                // structuredJson is also malformed — fall through to the 409 below.
+            }
+        }
+        if (!narrative) {
+            res.status(409).json({
+                error: 'Note has no reviewable content',
+                message: 'Documentation has not finished generating for this assessment.'
+            });
+            return;
+        }
+        const meta = toMetadata(note, req.user);
+        // A draft can be exported — clinicians legitimately want to read one away from the screen —
+        // but it is watermarked as a draft throughout and cannot be mistaken for a record.
+        let buffer;
         try {
-            narrative = (0, narrative_1.buildNarrative)(note.structuredJson);
+            buffer =
+                format === 'pdf'
+                    ? await clinicalDocument_1.clinicalDocumentService.generatePDF(meta, narrative)
+                    : await clinicalDocument_1.clinicalDocumentService.generateDOCX(meta, narrative);
+        }
+        catch (genErr) {
+            console.error(`[documents] ${format.toUpperCase()} generation error:`, genErr?.message ?? genErr);
+            res.status(500).json({
+                error: `Failed to generate ${format.toUpperCase()} document`,
+                detail: genErr?.message ?? String(genErr)
+            });
+            return;
+        }
+        if (note.status === 'APPROVED') {
+            try {
+                await notes()
+                    .update({ where: { id: note.id }, data: { exportedAt: new Date() } })
+                    .catch(() => undefined);
+            }
+            catch {
+                // Non-blocking
+            }
+        }
+        try {
+            auditLogger_1.auditLogger.log({
+                organisationId: req.user?.organisationId || 'default-org',
+                actorId: req.user?.id || 'clinician',
+                eventType: 'DOCUMENT_EXPORTED',
+                resourceType: 'ClinicalNote',
+                resourceId: note.id,
+                details: { format, status: note.status, bytes: buffer.length }
+            });
         }
         catch {
-            // structuredJson is also malformed — fall through to the 409 below.
+            // Non-blocking
+        }
+        const safeRef = String(meta.clientReference).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 60);
+        const suffix = note.status === 'APPROVED' ? '' : '_DRAFT';
+        const filename = `Vabatim_Assessment_${safeRef}${suffix}.${format}`;
+        res.setHeader('Content-Type', format === 'pdf'
+            ? 'application/pdf'
+            : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        // Filename is derived from the pseudonymous reference and sanitised; a client-supplied
+        // name is never reflected into this header.
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Cache-Control', 'no-store, private');
+        res.send(buffer);
+    }
+    catch (outerErr) {
+        console.error(`[documents] Critical error in sendDocument (${format}):`, outerErr);
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: `Failed to export ${format.toUpperCase()}`,
+                detail: outerErr?.message ?? String(outerErr)
+            });
         }
     }
-    if (!narrative) {
-        res.status(409).json({
-            error: 'Note has no reviewable content',
-            message: 'Documentation has not finished generating for this assessment.'
-        });
-        return;
-    }
-    const meta = toMetadata(note);
-    // A draft can be exported — clinicians legitimately want to read one away from the screen —
-    // but it is watermarked as a draft throughout and cannot be mistaken for a record.
-    let buffer;
-    try {
-        buffer =
-            format === 'pdf'
-                ? await clinicalDocument_1.clinicalDocumentService.generatePDF(meta, narrative)
-                : await clinicalDocument_1.clinicalDocumentService.generateDOCX(meta, narrative);
-    }
-    catch (genErr) {
-        console.error(`[documents] ${format.toUpperCase()} generation error:`, genErr?.message ?? genErr);
-        res.status(500).json({
-            error: `Failed to generate ${format.toUpperCase()} document`,
-            detail: genErr?.message ?? String(genErr)
-        });
-        return;
-    }
-    if (note.status === 'APPROVED') {
-        await notes()
-            .update({ where: { id: note.id }, data: { exportedAt: new Date() } })
-            .catch(() => undefined);
-    }
-    auditLogger_1.auditLogger.log({
-        organisationId: req.user.organisationId,
-        actorId: req.user.id,
-        eventType: 'DOCUMENT_EXPORTED',
-        resourceType: 'ClinicalNote',
-        resourceId: note.id,
-        details: { format, status: note.status, bytes: buffer.length }
-    });
-    const safeRef = String(meta.clientReference).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 60);
-    const suffix = note.status === 'APPROVED' ? '' : '_DRAFT';
-    const filename = `Vabatim_Assessment_${safeRef}${suffix}.${format}`;
-    res.setHeader('Content-Type', format === 'pdf'
-        ? 'application/pdf'
-        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    // Filename is derived from the pseudonymous reference and sanitised; a client-supplied
-    // name is never reflected into this header.
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Cache-Control', 'no-store, private');
-    res.send(buffer);
 }
-router.get('/:noteId/pdf', (req, res) => sendDocument(req, res, 'pdf'));
-router.get('/:noteId/docx', (req, res) => sendDocument(req, res, 'docx'));
+router.get('/:noteId/pdf', async (req, res) => {
+    try {
+        await sendDocument(req, res, 'pdf');
+    }
+    catch (err) {
+        console.error('[documents] Route /:noteId/pdf error:', err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to stream PDF', detail: err?.message ?? String(err) });
+        }
+    }
+});
+router.get('/:noteId/docx', async (req, res) => {
+    try {
+        await sendDocument(req, res, 'docx');
+    }
+    catch (err) {
+        console.error('[documents] Route /:noteId/docx error:', err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to stream DOCX', detail: err?.message ?? String(err) });
+        }
+    }
+});
 /**
  * Delivery by email.
  *

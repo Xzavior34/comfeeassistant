@@ -6,6 +6,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const app_1 = __importDefault(require("./app"));
 const env_1 = require("./config/env");
 const child_process_1 = require("child_process");
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[Process] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[Process] Uncaught Exception:', err);
+});
 const PORT = env_1.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 app_1.default.listen(PORT, HOST, () => {
