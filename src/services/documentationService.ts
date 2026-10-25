@@ -112,7 +112,7 @@ export class DocumentationService {
           narrativeJson: narrative as any,
           // AI output is never presented as clinician-approved.
           status: 'REVIEW_REQUIRED' as any,
-          aiModel: model.name ?? 'gemini',
+          aiModel: model.name ?? 'openrouter',
           promptVersion: result.promptVersion,
           versions: {
             create: [

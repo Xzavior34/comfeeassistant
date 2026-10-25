@@ -188,16 +188,45 @@ let cached: ModelClient | null = null;
 export function getClinicalModelClient(): ModelClient {
   if (cached) return cached;
 
-  if (env.LLM_PROVIDER === 'openrouter') {
-    const apiKey = env.OPENROUTER_API_KEY || env.LLM_API_KEY || process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
+  const openRouterKey =
+    env.OPENROUTER_API_KEY?.trim() ||
+    process.env.OPENROUTER_API_KEY?.trim() ||
+    (env.LLM_API_KEY?.trim().startsWith('sk-or-') ? env.LLM_API_KEY.trim() : undefined) ||
+    (process.env.LLM_API_KEY?.trim().startsWith('sk-or-') ? process.env.LLM_API_KEY.trim() : undefined);
+
+  const geminiKey =
+    env.GEMINI_API_KEY?.trim() ||
+    process.env.GEMINI_API_KEY?.trim() ||
+    (env.LLM_PROVIDER === 'gemini' && !env.LLM_API_KEY?.trim().startsWith('sk-or-')
+      ? (env.LLM_API_KEY?.trim() || process.env.LLM_API_KEY?.trim())
+      : undefined);
+
+  // Preference: OpenRouter is our primary clinical model provider.
+  // Use OpenRouter if:
+  // - env.LLM_PROVIDER === 'openrouter'
+  // - An OpenRouter API key is present
+  // - Or neither explicitly gemini nor gemini key is found
+  const shouldUseOpenRouter =
+    env.LLM_PROVIDER === 'openrouter' ||
+    Boolean(openRouterKey) ||
+    (env.LLM_PROVIDER !== 'gemini' && !geminiKey);
+
+  if (shouldUseOpenRouter) {
+    const key =
+      openRouterKey ||
+      env.OPENROUTER_API_KEY?.trim() ||
+      env.LLM_API_KEY?.trim() ||
+      process.env.OPENROUTER_API_KEY?.trim() ||
+      process.env.LLM_API_KEY?.trim();
+
+    if (!key) {
       throw new Error(
-        'The clinical language model is not configured on this server (missing OPENROUTER_API_KEY). ' +
+        'The clinical language model is not configured on this server (missing OPENROUTER_API_KEY or LLM_API_KEY). ' +
           'The transcript has been saved; documentation can be generated once it is configured.'
       );
     }
-    const modelName = env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp';
-    cached = new OpenRouterModelClient(apiKey, modelName);
+    const modelName = env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
+    cached = new OpenRouterModelClient(key, modelName);
     return cached;
   }
 
