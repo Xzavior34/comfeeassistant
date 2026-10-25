@@ -100,9 +100,21 @@ async function sendDocument(req, res, format) {
     const meta = toMetadata(note);
     // A draft can be exported — clinicians legitimately want to read one away from the screen —
     // but it is watermarked as a draft throughout and cannot be mistaken for a record.
-    const buffer = format === 'pdf'
-        ? await clinicalDocument_1.clinicalDocumentService.generatePDF(meta, narrative)
-        : await clinicalDocument_1.clinicalDocumentService.generateDOCX(meta, narrative);
+    let buffer;
+    try {
+        buffer =
+            format === 'pdf'
+                ? await clinicalDocument_1.clinicalDocumentService.generatePDF(meta, narrative)
+                : await clinicalDocument_1.clinicalDocumentService.generateDOCX(meta, narrative);
+    }
+    catch (genErr) {
+        console.error(`[documents] ${format.toUpperCase()} generation error:`, genErr?.message ?? genErr);
+        res.status(500).json({
+            error: `Failed to generate ${format.toUpperCase()} document`,
+            detail: genErr?.message ?? String(genErr)
+        });
+        return;
+    }
     if (note.status === 'APPROVED') {
         await notes()
             .update({ where: { id: note.id }, data: { exportedAt: new Date() } })

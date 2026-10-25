@@ -54,12 +54,13 @@ function title(meta: DocumentMetadata): string {
 export class ClinicalDocumentService {
   async generatePDF(meta: DocumentMetadata, narrative: ClinicalNarrative): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ margin: 56, bufferPages: true });
-      const chunks: Buffer[] = [];
+      try {
+        const doc = new PDFDocument({ margin: 56, bufferPages: true });
+        const chunks: Buffer[] = [];
 
-      doc.on('data', (c: Buffer) => chunks.push(c));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', reject);
+        doc.on('data', (c: Buffer) => chunks.push(c));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
 
       const approved = isApproved(meta);
 
@@ -144,13 +145,16 @@ export class ClinicalDocumentService {
             `${meta.clientReference}  ·  ${meta.assessmentDate}  ·  page ${i + 1} of ${range.count}`,
             56,
             doc.page.height - 40,
-            { align: 'center', width: doc.page.width - 112 }
+            { align: 'center', width: doc.page.width - 112, lineBreak: false }
           );
       }
 
       doc.end();
-    });
-  }
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
 
   async generateDOCX(meta: DocumentMetadata, narrative: ClinicalNarrative): Promise<Buffer> {
     const approved = isApproved(meta);
