@@ -50,12 +50,18 @@ export default defineConfig({
       '/api': {
         target: process.env.VITE_BACKEND_URL || 'https://comfeeassistant-zgrv.onrender.com',
         changeOrigin: true,
-        secure: false
+        secure: false,
+        headers: {
+          origin: 'https://comfeeassistant.vercel.app'
+        }
       },
       '/health': {
         target: process.env.VITE_BACKEND_URL || 'https://comfeeassistant-zgrv.onrender.com',
         changeOrigin: true,
-        secure: false
+        secure: false,
+        headers: {
+          origin: 'https://comfeeassistant.vercel.app'
+        }
       }
     }
   }
