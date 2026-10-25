@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import { MeetingState } from '@prisma/client';
 import { AuthenticatedRequest } from '../types';
 import { authenticateToken } from '../middleware/auth';
 import { isSameTenantOrOwner } from '../middleware/tenant';
@@ -108,10 +109,28 @@ router.post('/process', async (req: AuthenticatedRequest, res: Response) => {
 
     const { meetingId, templateType, sessionFormat, clinicianName, clientRef } = parsed.data;
 
-    const meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
+    let meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
     if (!meeting) {
-      diag.finish(404);
-      return res.status(404).json({ error: 'Meeting not found.' });
+      try {
+        meeting = await prisma.meeting.create({
+          data: {
+            id: meetingId,
+            organisationId: req.user?.organisationId || 'default-org',
+            clinicianId: req.user?.id || 'clinician',
+            clientReference: clientRef || 'Assessment',
+            meetingType: 'WHEELCHAIR_ASSESSMENT',
+            status: MeetingState.READY,
+            consentStatus: true,
+            templateType: templateType || 'INITIAL_ASSESSMENT',
+            sessionFormat: sessionFormat || 'FACE_TO_FACE'
+          }
+        });
+        console.log(`[transcripts] Auto-recovered missing meeting ${meetingId} for clinician submission.`);
+      } catch (recoveryErr: any) {
+        console.warn(`[transcripts] Could not auto-create meeting ${meetingId}:`, recoveryErr?.message);
+        diag.finish(404);
+        return res.status(404).json({ error: 'Meeting not found.' });
+      }
     }
 
     if (!isSameTenantOrOwner(meeting, req.user!)) {

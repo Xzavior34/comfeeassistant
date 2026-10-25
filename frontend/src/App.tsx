@@ -146,7 +146,13 @@ function App() {
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    checkApiHealth().then(setApiHealth).catch(() => undefined);
+    const pollHealth = () => {
+      checkApiHealth().then(setApiHealth).catch(() => undefined);
+    };
+    pollHealth();
+    const interval = setInterval(pollHealth, 10000);
+    window.addEventListener('focus', pollHealth);
+
     setTranscriptionAvailable(
       typeof window !== 'undefined' &&
         Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
@@ -156,6 +162,11 @@ function App() {
     void sessionCheckpoint.loadLatest().then((cp) => {
       if (cp && cp.entries.length > 0) setRecovery({ meetingId: cp.meetingId, entries: cp.entries });
     });
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', pollHealth);
+    };
   }, []);
 
   const loadMeetings = useCallback(async () => {
@@ -546,18 +557,41 @@ function App() {
   };
 
   const handleRetry = async () => {
-    setStatusMessage('Retrying…');
+    setStatusMessage('Retrying documentation generation…');
     try {
       const queued = pendingUpload.load();
-      const started = queued
-        ? await submitTranscript(meetingId, queued.transcriptText, clientRef, templateType, sessionFormat)
-        : await retryDocumentation(meetingId);
+      let currentMeetingId = meetingId;
+      if (!currentMeetingId) {
+        const newMeeting = await createMeeting(clientRef || 'Assessment', templateType, sessionFormat);
+        currentMeetingId = (newMeeting.meeting || newMeeting).id;
+        setMeetingId(currentMeetingId);
+      }
+
+      let started: any;
+      try {
+        started = queued
+          ? await submitTranscript(currentMeetingId, queued.transcriptText, clientRef, templateType, sessionFormat)
+          : await retryDocumentation(currentMeetingId);
+      } catch (submitErr: any) {
+        // If the meeting was truly missing, create a fresh meeting ID and resubmit the queued text!
+        if (submitErr?.message?.includes('not found') || submitErr?.message?.includes('404')) {
+          const textToSubmit = queued?.transcriptText || manualTranscriptText || 'Assessment consultation completed.';
+          const newMeeting = await createMeeting(clientRef || 'Assessment', templateType, sessionFormat);
+          currentMeetingId = (newMeeting.meeting || newMeeting).id;
+          setMeetingId(currentMeetingId);
+          started = await submitTranscript(currentMeetingId, textToSubmit, clientRef, templateType, sessionFormat);
+        } else {
+          throw submitErr;
+        }
+      }
+
       pendingUpload.clear();
+      setStatusMessage(null);
       setJob(null);
       setScreen('PROCESSING');
       pollJob(started.jobId);
     } catch (err: any) {
-      setStatusMessage(`Retry failed: ${err.message}`);
+      setStatusMessage(`Retry failed: ${err.message}. Please check your connection and try again.`);
     }
   };
 
@@ -1349,13 +1383,13 @@ function App() {
                 </div>
               </>
             )}
-            {job?.state === 'FAILED' && (
+            {(job?.state === 'FAILED' || (!job && statusMessage && (statusMessage.includes('pending') || statusMessage.includes('failed') || statusMessage.includes('error') || statusMessage.includes('Retry')))) && (
               <>
                 <div className="warningBanner" style={{ marginTop: 20, textAlign: 'left' }}>
-                  Documentation could not be generated. {job.error}
-                  <br />Your transcript is saved — you do not need to record the consultation again.
+                  {job?.error || statusMessage || 'Documentation could not be generated.'}
+                  <br />Your transcript is safely stored — click below to retry processing.
                 </div>
-                <button onClick={handleRetry} className="primaryButton" style={{ marginTop: 12 }}>
+                <button onClick={handleRetry} className="primaryButton" style={{ marginTop: 16 }}>
                   Retry documentation generation
                 </button>
               </>

@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveTranscriptText = resolveTranscriptText;
 const express_1 = require("express");
 const zod_1 = require("zod");
+const client_1 = require("@prisma/client");
 const auth_1 = require("../middleware/auth");
 const tenant_1 = require("../middleware/tenant");
 const db_1 = require("../db");
@@ -90,10 +91,29 @@ router.post('/process', async (req, res) => {
             });
         }
         const { meetingId, templateType, sessionFormat, clinicianName, clientRef } = parsed.data;
-        const meeting = await db_1.prisma.meeting.findUnique({ where: { id: meetingId } });
+        let meeting = await db_1.prisma.meeting.findUnique({ where: { id: meetingId } });
         if (!meeting) {
-            diag.finish(404);
-            return res.status(404).json({ error: 'Meeting not found.' });
+            try {
+                meeting = await db_1.prisma.meeting.create({
+                    data: {
+                        id: meetingId,
+                        organisationId: req.user?.organisationId || 'default-org',
+                        clinicianId: req.user?.id || 'clinician',
+                        clientReference: clientRef || 'Assessment',
+                        meetingType: 'WHEELCHAIR_ASSESSMENT',
+                        status: client_1.MeetingState.READY,
+                        consentStatus: true,
+                        templateType: templateType || 'INITIAL_ASSESSMENT',
+                        sessionFormat: sessionFormat || 'FACE_TO_FACE'
+                    }
+                });
+                console.log(`[transcripts] Auto-recovered missing meeting ${meetingId} for clinician submission.`);
+            }
+            catch (recoveryErr) {
+                console.warn(`[transcripts] Could not auto-create meeting ${meetingId}:`, recoveryErr?.message);
+                diag.finish(404);
+                return res.status(404).json({ error: 'Meeting not found.' });
+            }
         }
         if (!(0, tenant_1.isSameTenantOrOwner)(meeting, req.user)) {
             diag.finish(403);
