@@ -5,6 +5,7 @@ const auth_1 = require("../middleware/auth");
 const tenant_1 = require("../middleware/tenant");
 const db_1 = require("../db");
 const clinicalDocument_1 = require("../services/clinicalDocument");
+const narrative_1 = require("../clinical/narrative");
 const auditLogger_1 = require("../services/auditLogger");
 const email_1 = require("../providers/email");
 const signedLinks_1 = require("../services/signedLinks");
@@ -78,7 +79,17 @@ async function sendDocument(req, res, format) {
         return;
     }
     const note = loaded.note;
-    const narrative = note.narrativeJson;
+    let narrative = note.narrativeJson;
+    // Legacy notes generated before narrativeJson was stored have only structuredJson.
+    // Rebuild the narrative from it so the document can still be exported.
+    if (!narrative && note.structuredJson) {
+        try {
+            narrative = (0, narrative_1.buildNarrative)(note.structuredJson);
+        }
+        catch {
+            // structuredJson is also malformed — fall through to the 409 below.
+        }
+    }
     if (!narrative) {
         res.status(409).json({
             error: 'Note has no reviewable content',

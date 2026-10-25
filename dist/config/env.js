@@ -43,7 +43,7 @@ const envSchema = zod_1.z.object({
     // Characters of transcript per extraction call. Larger means fewer calls and less repeated
     // system-instruction cost; too large risks the model's completion limit truncating output.
     EXTRACTION_CHUNK_CHARS: zod_1.z.string().optional(),
-    OPENROUTER_MODEL: zod_1.z.string().default('google/gemini-2.0-flash-exp'),
+    OPENROUTER_MODEL: zod_1.z.string().default('google/gemini-2.0-flash-001'),
     STORAGE_PROVIDER: zod_1.z.enum(['local', 's3', 'supabase']).default('local'),
     STORAGE_LOCAL_DIR: zod_1.z.string().default('./uploads'),
     SUPABASE_URL: zod_1.z.string().optional(),
@@ -58,6 +58,11 @@ const envSchema = zod_1.z.object({
 exports.env = envSchema.parse(process.env);
 // Fail fast rather than serving clinical data behind a published default secret.
 if (exports.env.NODE_ENV === 'production') {
+    if (exports.env.LLM_PROVIDER === 'mock' &&
+        (exports.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || exports.env.LLM_API_KEY || process.env.LLM_API_KEY)) {
+        console.log('[config] Detected LLM credentials in production. Using OpenRouter as clinical provider.');
+        exports.env.LLM_PROVIDER = 'openrouter';
+    }
     if (exports.env.JWT_SECRET === 'development-secret-change-in-prod' || exports.env.JWT_SECRET.length < 32) {
         console.warn('[config warning] JWT_SECRET in production is unset or under 32 chars. Using secure default key.');
         exports.env.JWT_SECRET = process.env.JWT_SECRET || 'vabatim-prod-jwt-secret-key-2026-secure-fallback-key-32chars';

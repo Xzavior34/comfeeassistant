@@ -51,21 +51,22 @@ class ClinicalDocumentService {
             doc.moveDown(0.5);
             doc.moveTo(56, doc.y).lineTo(556, doc.y).strokeColor('#D0D5DD').stroke();
             doc.moveDown(0.8);
-            for (const section of narrative.sections) {
+            for (const section of (narrative.sections ?? [])) {
                 // Keep a heading with at least its first line rather than orphaning it at a page
                 // break, which makes a long clinical document much harder to read.
                 if (doc.y > 690)
                     doc.addPage();
-                doc.fontSize(11).fillColor('#1F3864').text(section.title);
+                doc.fontSize(11).fillColor('#1F3864').text(section.title ?? '');
                 doc.moveDown(0.25);
                 doc.fontSize(10).fillColor('#000000');
-                if (section.entries.length === 0) {
+                const entries = section.entries ?? [];
+                if (entries.length === 0) {
                     doc.fillColor('#555555').text(section.notEstablished ?? 'Not discussed during this assessment.');
                     doc.fillColor('#000000');
                 }
                 else {
-                    for (const entry of section.entries) {
-                        doc.text(entry.text, { align: 'left' });
+                    for (const entry of entries) {
+                        doc.text(entry.text ?? '', { align: 'left' });
                         doc.moveDown(0.2);
                     }
                 }
@@ -73,12 +74,13 @@ class ClinicalDocumentService {
             }
             // Outstanding review items travel with the document only while it is a draft; once
             // approved, the clinician has resolved them by approving.
-            if (!approved && narrative.reviewFlags.length > 0) {
+            const reviewFlags = narrative.reviewFlags ?? [];
+            if (!approved && reviewFlags.length > 0) {
                 doc.addPage();
                 doc.fontSize(11).fillColor('#1F3864').text('Items requiring clinician review');
                 doc.moveDown(0.3).fontSize(10).fillColor('#000000');
-                for (const flag of narrative.reviewFlags) {
-                    doc.text(`• ${flag.description}`);
+                for (const flag of reviewFlags) {
+                    doc.text(`• ${flag.description ?? ''}`);
                     doc.moveDown(0.15);
                 }
                 doc.moveDown(0.6);
@@ -124,9 +126,10 @@ class ClinicalDocumentService {
         if (approved) {
             children.push(new docx_1.Paragraph({ text: `Approved by: ${meta.approvedBy} on ${meta.approvedAt}` }));
         }
-        for (const section of narrative.sections) {
-            children.push(new docx_1.Paragraph({ text: section.title, heading: docx_1.HeadingLevel.HEADING_2 }));
-            if (section.entries.length === 0) {
+        for (const section of (narrative.sections ?? [])) {
+            children.push(new docx_1.Paragraph({ text: section.title ?? '', heading: docx_1.HeadingLevel.HEADING_2 }));
+            const entries = section.entries ?? [];
+            if (entries.length === 0) {
                 children.push(new docx_1.Paragraph({
                     children: [
                         new docx_1.TextRun({
@@ -138,15 +141,16 @@ class ClinicalDocumentService {
                 }));
             }
             else {
-                for (const entry of section.entries) {
-                    children.push(new docx_1.Paragraph({ text: entry.text }));
+                for (const entry of entries) {
+                    children.push(new docx_1.Paragraph({ text: entry.text ?? '' }));
                 }
             }
         }
-        if (!approved && narrative.reviewFlags.length > 0) {
+        const reviewFlags = narrative.reviewFlags ?? [];
+        if (!approved && reviewFlags.length > 0) {
             children.push(new docx_1.Paragraph({ text: 'Items requiring clinician review', heading: docx_1.HeadingLevel.HEADING_2 }));
-            for (const flag of narrative.reviewFlags) {
-                children.push(new docx_1.Paragraph({ text: flag.description, bullet: { level: 0 } }));
+            for (const flag of reviewFlags) {
+                children.push(new docx_1.Paragraph({ text: flag.description ?? '', bullet: { level: 0 } }));
             }
         }
         children.push(new docx_1.Paragraph({ text: 'Attestation', heading: docx_1.HeadingLevel.HEADING_2 }));

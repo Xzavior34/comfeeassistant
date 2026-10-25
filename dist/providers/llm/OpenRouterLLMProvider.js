@@ -7,87 +7,110 @@ const clinicalPasses_1 = require("../../services/clinicalPasses");
 const GeminiLLMProvider_1 = require("./GeminiLLMProvider");
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_DEFAULT_CANDIDATES = [
+    'google/gemini-2.0-flash-001',
     'google/gemini-2.0-flash-exp',
+    'google/gemini-2.5-flash',
     'google/gemini-flash-1.5',
     'openai/gpt-4o-mini',
     'anthropic/claude-3.5-haiku',
     'meta-llama/llama-3.3-70b-instruct'
 ];
 class OpenRouterModelClient {
-    apiKey;
     modelName;
     name;
-    constructor(apiKey, modelName = 'google/gemini-2.0-flash-exp') {
-        this.apiKey = apiKey;
+    apiKey;
+    constructor(apiKey, modelName = 'google/gemini-2.0-flash-001') {
         this.modelName = modelName;
+        this.apiKey = (apiKey || '').trim();
         this.name = `OpenRouter:${modelName}`;
     }
     async generate(systemInstruction, userContent) {
         const candidates = Array.from(new Set([this.modelName, ...OPENROUTER_DEFAULT_CANDIDATES].filter(Boolean)));
         let lastError = null;
         for (const candidate of candidates) {
-            const payload = {
-                model: candidate,
-                messages: [
-                    { role: 'system', content: systemInstruction },
-                    { role: 'user', content: userContent }
-                ],
-                temperature: 0,
-                top_p: 0.1,
-                response_format: { type: 'json_object' },
-                // Without an explicit ceiling the completion is capped at whatever the model's
-                // default happens to be — commonly 4096. A full assessment extraction exceeds that,
-                // so the JSON is cut off mid-object, fails schema validation, and burns both repair
-                // attempts before failing. Truncation is billed like any other output, so this is
-                // both a reliability fix and a cost one.
-                max_tokens: 32000
-            };
-            for (let attempt = 1; attempt <= 2; attempt++) {
-                try {
-                    const response = await fetch(OPENROUTER_API_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${this.apiKey}`,
-                            'Content-Type': 'application/json',
-                            'HTTP-Referer': 'https://comfeeassistant.vercel.app',
-                            'X-Title': 'Vabatim UK Wheelchair & Seating AI Assistant'
-                        },
-                        body: JSON.stringify(payload)
-                    });
-                    if (!response.ok) {
-                        const errText = await response.text().catch(() => '');
-                        const status = response.status;
-                        const is404 = status === 404 || /No endpoints found/i.test(errText);
-                        // Not every model on OpenRouter supports response_format or the requested
-                        // max_tokens. That comes back as a 400, which is just as much a "this candidate
-                        // cannot serve the request" as a 404, and should move to the next one rather
-                        // than aborting the consultation.
-                        const isUnsupported = status === 400 && /response_format|max_tokens|not support/i.test(errText);
-                        if (is404 || isUnsupported) {
-                            console.warn(`[OpenRouter] Candidate model "${candidate}" cannot serve this request (HTTP ${status}). Trying next candidate...`);
-                            lastError = new Error(`OpenRouter HTTP ${status} for ${candidate}: ${errText.slice(0, 150)}`);
-                            break; // Break attempt loop to try next candidate model
-                        }
-                        throw new Error(`OpenRouter HTTP ${status}: ${errText.slice(0, 200)}`);
-                    }
-                    const data = await response.json();
-                    const content = data?.choices?.[0]?.message?.content;
-                    if (!content || typeof content !== 'string') {
-                        throw new Error('OpenRouter returned empty or invalid choices array');
-                    }
-                    if (this.modelName !== candidate) {
-                        console.log(`[OpenRouter] Successfully verified working model "${candidate}".`);
-                        this.modelName = candidate;
-                        this.name = `OpenRouter:${candidate}`;
-                    }
-                    return content;
+            // First attempt with response_format json_object, fallback to unconstrained if model doesn't support it
+            for (const useJsonFormat of [true, false]) {
+                const payload = {
+                    model: candidate,
+                    messages: [
+                        { role: 'system', content: systemInstruction },
+                        { role: 'user', content: userContent }
+                    ],
+                    temperature: 0,
+                    top_p: 0.1,
+                    max_tokens: 32000
+                };
+                if (useJsonFormat) {
+                    payload.response_format = { type: 'json_object' };
                 }
-                catch (err) {
-                    lastError = err;
-                    console.warn(`[OpenRouter] Model "${candidate}" attempt ${attempt}/2 failed: ${err?.message ?? err}`);
-                    if (attempt < 2) {
-                        await new Promise((r) => setTimeout(r, 500 * attempt));
+                let modelAttemptFailed = false;
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    try {
+                        const response = await fetch(OPENROUTER_API_URL, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${this.apiKey}`,
+                                'Content-Type': 'application/json',
+                                'HTTP-Referer': 'https://comfeeassistant.vercel.app',
+                                'X-Title': 'Vabatim UK Wheelchair & Seating AI Assistant'
+                            },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!response.ok) {
+                            const errText = await response.text().catch(() => '');
+                            const status = response.status;
+                            if (status === 401) {
+                                throw new Error('OpenRouter API authentication failed (HTTP 401). Please check OPENROUTER_API_KEY in your server environment.');
+                            }
+                            if (status === 402) {
+                                throw new Error('OpenRouter account has insufficient credits (HTTP 402). Please add credits to your OpenRouter account.');
+                            }
+                            const is404 = status === 404 || /No endpoints found|not found/i.test(errText);
+                            const isUnsupportedFormat = status === 400 && /response_format|not support/i.test(errText);
+                            if (isUnsupportedFormat && useJsonFormat) {
+                                // Retry without response_format on this candidate
+                                console.warn(`[OpenRouter] Model "${candidate}" does not support json_object response_format. Retrying without it...`);
+                                break; // Break attempt loop to proceed to useJsonFormat = false
+                            }
+                            if (is404 || status === 400) {
+                                console.warn(`[OpenRouter] Candidate model "${candidate}" returned HTTP ${status}: ${errText.slice(0, 150)}. Trying next candidate...`);
+                                lastError = new Error(`OpenRouter HTTP ${status} for ${candidate}: ${errText.slice(0, 150)}`);
+                                modelAttemptFailed = true;
+                                break;
+                            }
+                            if (status === 429) {
+                                console.warn(`[OpenRouter] Model "${candidate}" rate limited (HTTP 429). Trying next candidate...`);
+                                lastError = new Error(`OpenRouter rate limit on ${candidate}`);
+                                modelAttemptFailed = true;
+                                break;
+                            }
+                            throw new Error(`OpenRouter HTTP ${status}: ${errText.slice(0, 200)}`);
+                        }
+                        const data = await response.json();
+                        const content = data?.choices?.[0]?.message?.content;
+                        if (!content || typeof content !== 'string') {
+                            throw new Error('OpenRouter returned empty or invalid choices array');
+                        }
+                        if (this.modelName !== candidate) {
+                            console.log(`[OpenRouter] Successfully verified working model "${candidate}".`);
+                            this.modelName = candidate;
+                            this.name = `OpenRouter:${candidate}`;
+                        }
+                        return content;
                     }
+                    catch (err) {
+                        lastError = err;
+                        if (/HTTP 401|HTTP 402/i.test(err?.message)) {
+                            throw err;
+                        }
+                        console.warn(`[OpenRouter] Model "${candidate}" attempt ${attempt}/2 failed: ${err?.message ?? err}`);
+                        if (attempt < 2) {
+                            await new Promise((r) => setTimeout(r, 500 * attempt));
+                        }
+                    }
+                }
+                if (modelAttemptFailed) {
+                    break; // Move to next candidate model
                 }
             }
         }
@@ -98,14 +121,17 @@ exports.OpenRouterModelClient = OpenRouterModelClient;
 class OpenRouterLLMProvider {
     name = 'OpenRouter';
     getApiKey() {
-        const key = env_1.env.OPENROUTER_API_KEY || env_1.env.LLM_API_KEY || process.env.OPENROUTER_API_KEY;
+        const key = env_1.env.OPENROUTER_API_KEY?.trim() ||
+            process.env.OPENROUTER_API_KEY?.trim() ||
+            env_1.env.LLM_API_KEY?.trim() ||
+            process.env.LLM_API_KEY?.trim();
         if (!key) {
-            throw new Error('[OpenRouterLLMProvider] Missing OPENROUTER_API_KEY.');
+            throw new Error('[OpenRouterLLMProvider] Missing OPENROUTER_API_KEY or LLM_API_KEY.');
         }
         return key;
     }
     getModelName() {
-        return env_1.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp';
+        return env_1.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
     }
     async checkHealth() {
         try {
