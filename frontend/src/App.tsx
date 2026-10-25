@@ -407,6 +407,10 @@ function App() {
     );
 
     if (!started) setTranscriptionAvailable(false);
+    if (!started) {
+      setTranscriptionAvailable(false);
+      setStatusMessage('Live transcription is not available in this browser. Use the text editor below to type your consultation notes, or load the sample assessment to test.');
+    }
     setIsListening(true);
 
     if (recordingAllowed) {
@@ -435,7 +439,7 @@ function App() {
 
   const submitTranscriptContent = async (textToSubmit: string) => {
     setScreen('PROCESSING');
-    setStatusMessage('Preparing clinical documentation…');
+    setStatusMessage(null);
     setShowNoTranscriptModal(false);
 
     try {
@@ -787,8 +791,11 @@ function App() {
         )}
 
         {screen === 'LOGIN' && (
-          <div className="card">
+          <div className="card" style={{ maxWidth: 420, margin: '0 auto' }}>
             <h2>Secure clinician access</h2>
+            <p className="hint" style={{ marginBottom: 20 }}>
+              AI-assisted clinical documentation for healthcare professionals.
+            </p>
             <form onSubmit={handleLogin} className="form">
               <label className="label">Clinician email</label>
               <input
@@ -1080,6 +1087,18 @@ function App() {
 
         {screen === 'MEETINGS' && (
           <div className="card">
+            <div className="backRow">
+              <button className="backButton" onClick={() => setScreen('DASHBOARD')}>← Back to sessions</button>
+            </div>
+            <div className="stepIndicator">
+              <div className="step active">1</div>
+              <div className="stepLine"></div>
+              <div className="step">2</div>
+              <div className="stepLine"></div>
+              <div className="step">3</div>
+              <div className="stepLine"></div>
+              <div className="step">4</div>
+            </div>
             <h2>New assessment</h2>
             <div className="form" style={{ marginTop: 20 }}>
               <label className="label">Client reference (pseudonymous — no patient name)</label>
@@ -1120,6 +1139,18 @@ function App() {
 
         {screen === 'CONSENT' && (
           <div className="card">
+            <div className="backRow">
+              <button className="backButton" onClick={() => setScreen('DASHBOARD')}>← Back</button>
+            </div>
+            <div className="stepIndicator">
+              <div className="step done">✓</div>
+              <div className="stepLine done"></div>
+              <div className="step active">2</div>
+              <div className="stepLine"></div>
+              <div className="step">3</div>
+              <div className="stepLine"></div>
+              <div className="step">4</div>
+            </div>
             <h2>Consent to record</h2>
             <div className="consentBox">
               <p>
@@ -1135,15 +1166,26 @@ function App() {
               <button onClick={handleGrantConsent} className="primaryButton">
                 Consent given — continue
               </button>
-              <button onClick={() => setScreen('DASHBOARD')} className="secondaryButton">
-                Cancel
-              </button>
             </div>
           </div>
         )}
 
         {screen === 'RECORDING' && (
           <div className="card">
+            {!isListening && (
+              <div className="backRow">
+                <button className="backButton" onClick={() => setScreen('DASHBOARD')}>← Back to dashboard</button>
+              </div>
+            )}
+            <div className="stepIndicator">
+              <div className="step done">✓</div>
+              <div className="stepLine done"></div>
+              <div className="step done">✓</div>
+              <div className="stepLine done"></div>
+              <div className="step active">3</div>
+              <div className="stepLine"></div>
+              <div className="step">4</div>
+            </div>
             <div className="recordingHeader">
               <div>
                 <span className={isListening ? 'liveIndicator' : ''} />
@@ -1281,63 +1323,39 @@ function App() {
               </div>
             )}
 
-            {/* TEMPORARY PRODUCTION DIAGNOSTICS PANEL */}
-            <div
-              style={{
-                marginTop: 20,
-                padding: 16,
-                background: '#0f172a',
-                border: '1px solid #334155',
-                borderRadius: 8,
-                fontSize: '12px',
-                fontFamily: 'monospace',
-                color: '#cbd5e1',
-                textAlign: 'left'
-              }}
-            >
-              <h4 style={{ margin: '0 0 10px 0', color: '#38bdf8', fontSize: '13px', fontFamily: 'sans-serif' }}>
-                🔍 WEB SPEECH DIAGNOSTICS (PRODUCTION VERIFICATION PANEL)
-              </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 16px', marginBottom: 12 }}>
-                <div><strong>Recognition API:</strong> <span style={{ color: '#f59e0b' }}>{speechDiagnostics?.api ?? 'unavailable'}</span></div>
-                <div><strong>Recognition State:</strong> <span style={{ color: '#f59e0b' }}>{speechDiagnostics?.state ?? 'idle'}</span></div>
-                <div><strong>Last Error Code:</strong> <span style={{ color: speechDiagnostics?.lastErrorCode && speechDiagnostics.lastErrorCode !== 'none' ? '#ef4444' : '#10b981' }}>{speechDiagnostics?.lastErrorCode ?? 'none'}</span></div>
-                <div><strong>MediaRecorder Start:</strong> {speechDiagnostics?.mediaRecorderStartTimeMs ? `${speechDiagnostics.mediaRecorderStartTimeMs} ms` : 'none'}</div>
-                <div><strong>Speech Start Requested:</strong> {speechDiagnostics?.speechStartRequestedTimeMs ? `${speechDiagnostics.speechStartRequestedTimeMs} ms` : 'none'}</div>
-                <div><strong>Speech onstart Event:</strong> {speechDiagnostics?.speechOnStartTimeMs ? `${speechDiagnostics.speechOnStartTimeMs} ms` : 'none'}</div>
-              </div>
-
-              <h5 style={{ margin: '8px 0 4px 0', color: '#94a3b8', fontSize: '11px', fontFamily: 'sans-serif' }}>EVENT COUNTERS</h5>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px' }}>
-                <div>startAttempts: <strong>{speechDiagnostics?.counters?.startAttempts ?? 0}</strong></div>
-                <div>onstart: <strong>{speechDiagnostics?.counters?.onstartEvents ?? 0}</strong></div>
-                <div>onaudiostart: <strong>{speechDiagnostics?.counters?.onaudiostartEvents ?? 0}</strong></div>
-                <div>onsoundstart: <strong>{speechDiagnostics?.counters?.onsoundstartEvents ?? 0}</strong></div>
-                <div>onspeechstart: <strong>{speechDiagnostics?.counters?.onspeechstartEvents ?? 0}</strong></div>
-                <div>onresult: <strong>{speechDiagnostics?.counters?.onresultEvents ?? 0}</strong></div>
-                <div>finalResults: <strong>{speechDiagnostics?.counters?.finalResults ?? 0}</strong></div>
-                <div>interimResults: <strong>{speechDiagnostics?.counters?.interimResults ?? 0}</strong></div>
-                <div>onend: <strong>{speechDiagnostics?.counters?.onendEvents ?? 0}</strong></div>
-                <div>restartAttempts: <strong>{speechDiagnostics?.counters?.restartAttempts ?? 0}</strong></div>
-              </div>
-            </div>
+            {/* Small non-intrusive status bar for error codes */}
+            {speechDiagnostics?.lastErrorCode && speechDiagnostics.lastErrorCode !== 'none' && (
+              <p className="hint" style={{ fontSize: '12px', color: '#f59e0b', marginTop: 8 }}>
+                Transcription notice: {speechDiagnostics.lastErrorCode}
+              </p>
+            )}
           </div>
         )}
 
         {screen === 'PROCESSING' && (
-          <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>⚙️</div>
-            <h2>{job?.stage ?? statusMessage ?? 'Preparing clinical documentation…'}</h2>
-            <p className="hint">{job ? `${job.progress}%` : ''}</p>
-
+          <div className="card" style={{ textAlign: 'center', padding: 48 }}>
+            <div className="backRow" style={{ justifyContent: 'flex-start', marginBottom: 24 }}>
+              <button className="backButton" onClick={() => setScreen('DASHBOARD')}>← Back to sessions</button>
+            </div>
+            <div style={{ fontSize: 56, marginBottom: 20 }}>🤖</div>
+            <h2 style={{ fontSize: 22, marginBottom: 8 }}>
+              {job?.stage ?? statusMessage ?? 'Preparing clinical documentation…'}
+            </h2>
+            {job && (
+              <>
+                <p className="hint" style={{ marginBottom: 0 }}>{job.progress}% complete</p>
+                <div className="progressBar" style={{ margin: '12px auto', maxWidth: 320 }}>
+                  <div className="progressFill" style={{ width: `${job.progress}%` }} />
+                </div>
+              </>
+            )}
             {job?.state === 'FAILED' && (
               <>
-                <div className="warningBanner">
+                <div className="warningBanner" style={{ marginTop: 20, textAlign: 'left' }}>
                   Documentation could not be generated. {job.error}
-                  <br />
-                  Your transcript is saved — you do not need to record the consultation again.
+                  <br />Your transcript is saved — you do not need to record the consultation again.
                 </div>
-                <button onClick={handleRetry} className="primaryButton">
+                <button onClick={handleRetry} className="primaryButton" style={{ marginTop: 12 }}>
                   Retry documentation generation
                 </button>
               </>
@@ -1347,6 +1365,18 @@ function App() {
 
         {screen === 'REVIEW' && (
           <div className="card">
+            <div className="backRow">
+              <button className="backButton" onClick={() => { void loadMeetings(); setScreen('DASHBOARD'); }}>← Back to sessions</button>
+            </div>
+            <div className="stepIndicator">
+              <div className="step done">✓</div>
+              <div className="stepLine done"></div>
+              <div className="step done">✓</div>
+              <div className="stepLine done"></div>
+              <div className="step done">✓</div>
+              <div className="stepLine done"></div>
+              <div className="step active">4</div>
+            </div>
             {reviewFinalised ? (
               <div className="approvedNoticeBanner">
                 <strong>Approved.</strong> This is a finalised clinical record, reopened for viewing.
