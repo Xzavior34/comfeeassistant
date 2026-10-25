@@ -45,6 +45,18 @@ export default defineConfig({
     sourcemap: false
   },
   server: {
-    port: 5173
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: process.env.VITE_BACKEND_URL || 'https://comfeeassistant-zgrv.onrender.com',
+        changeOrigin: true,
+        secure: false
+      },
+      '/health': {
+        target: process.env.VITE_BACKEND_URL || 'https://comfeeassistant-zgrv.onrender.com',
+        changeOrigin: true,
+        secure: false
+      }
+    }
   }
 });
